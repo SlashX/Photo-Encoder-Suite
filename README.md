@@ -207,6 +207,14 @@ Build `libultrahdr` locally:
 
 ---
 
+## Support
+
+If you find this project useful, consider a small donation — it helps keep the development going!
+
+[💙 Donate via PayPal](https://paypal.me/TiberiuDobrescu)
+
+---
+
 ## Changelog
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
