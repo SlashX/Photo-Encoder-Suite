@@ -1,0 +1,30 @@
+# Fisiere temporare ImageMagick
+*.tmp
+*.bak
+
+# Output foto (sa nu urci accidental fisiere mari)
+*.avif
+*.webp
+*.jxl
+*.heic
+
+# Profile salvate local
+Profiles/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# PowerShell
+*.ps1xml
+
+# Python cache
+__pycache__/
+*.pyc

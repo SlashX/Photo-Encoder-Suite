@@ -1,0 +1,471 @@
+═══════════════════════════════════════════════════════════════
+  Photo Encoder Suite v4.1
+  Samsung / Google / iPhone / DJI • Ultra HDR
+  Documentatie Setup & Utilizare
+═══════════════════════════════════════════════════════════════
+
+
+CUPRINS
+───────
+  1. Structura proiectului
+  2. Cerinte de sistem
+  3. Setup Termux (Android)
+  4. Setup Windows
+  5. Structura foldere
+  6. Flux conversie — cum functioneaza
+  7. Optiuni detaliate
+  8. Ultra HDR (UHDR)
+  9. DJI Photo
+ 10. Profiles (photo_profiles.conf)
+ 11. Diferente intre platforme
+ 12. Utilizare rapida (comenzi pornire)
+ 13. Comenzi rapide Termux (edit, backup, stergere)
+ 14. Troubleshooting
+
+
+═══════════════════════════════════════════════════════════════
+1. STRUCTURA PROIECTULUI
+═══════════════════════════════════════════════════════════════
+
+10 fisiere totale:
+
+  TERMUX / LINUX (Bash)
+  ─────────────────────
+  photo_launcher.sh          — Meniu interactiv (10 optiuni, 0-9)
+  photo_encoder.sh           — Engine conversie (toate features-urile)
+  photo_check.sh             — Analiza completa foto + CSV 50 campuri
+  photo_build_ultrahdr.sh    — Script compilare libultrahdr (optional)
+
+  WINDOWS (PowerShell)
+  ────────────────────
+  photo_encoder.ps1          — Script PowerShell
+  photo_check.ps1              — Analiza completa foto + CSV 50 campuri
+  photo_build_ultrahdr.ps1   — Script compilare libultrahdr PS1 (optional)
+
+  CONFIGURARE
+  ───────────
+  photo_profiles.conf        — 22 profile predefinite (instagram, web, dji, etc.)
+
+  DOCUMENTATIE
+  ────────────
+  photo_info.txt             — Documentatie completa (acest fisier)
+  photo_changelog.txt        — Istoric versiuni
+
+Nota: Scripturile Windows (PS1) sunt complet independente de cele bash.
+      photo_profiles.conf e folosit de photo_encoder.sh cu --profile flag.
+
+
+═══════════════════════════════════════════════════════════════
+2. CERINTE DE SISTEM
+═══════════════════════════════════════════════════════════════
+
+OBLIGATORIU:
+  - ImageMagick 7.x  (magick command)
+    Termux: pkg install imagemagick
+    Windows: https://imagemagick.org/script/download.php
+
+OPTIONAL (recomandat):
+  - ExifTool          (UHDR detection, EXIF transfer, DJI metadata)
+    Termux: pkg install perl && cpan Image::ExifTool
+            sau: pkg install exiftool -y (daca e disponibil)
+    Windows: https://exiftool.org
+
+  - jpegtran/mozjpeg  (lossless JPEG optimization)
+    Termux: pkg install libjpeg-turbo
+    Windows: https://mozjpeg.codelove.de/binaries.html
+
+  - libultrahdr       (ultrahdr_app — decodare completa Ultra HDR)
+    Compileaza cu: photo_build_ultrahdr.sh (Termux)
+                   photo_build_ultrahdr.ps1 (Windows)
+
+
+═══════════════════════════════════════════════════════════════
+3. SETUP TERMUX (Android)
+═══════════════════════════════════════════════════════════════
+
+Pasul 1 — Instaleaza Termux
+  - Google Play Store sau F-Droid: com.termux
+
+Pasul 2 — Permite acces la storage
+  $ termux-setup-storage
+  (accepta permisiunea)
+
+Pasul 3 — Instaleaza dependinte
+  $ pkg update -y
+  $ pkg install imagemagick -y
+  $ pkg install perl -y
+  $ cpan Image::ExifTool
+  (sau: pkg install exiftool -y)
+
+Pasul 4 — Copiaza fisierele
+  $ mkdir -p /storage/emulated/0/Media/Scripts
+  $ cp photo_encoder.sh photo_launcher.sh photo_check.sh \
+       photo_build_ultrahdr.sh photo_profiles.conf \
+       /storage/emulated/0/Media/Scripts/
+  $ chmod +x /storage/emulated/0/Media/Scripts/*.sh
+
+Pasul 5 — Ruleaza
+  $ cd /storage/emulated/0/Media/Scripts
+  $ bash photo_launcher.sh
+  sau direct:
+  $ bash photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Media/OutputPhotos -f avif -p web
+
+
+═══════════════════════════════════════════════════════════════
+4. SETUP WINDOWS
+═══════════════════════════════════════════════════════════════
+
+Pasul 1 — Instaleaza ImageMagick
+  Download: https://imagemagick.org/script/download.php
+  Alege: ImageMagick-7.x-Q16-HDRI-x64-dll.exe
+  Important: bifeaza "Add to system PATH" la instalare
+
+Pasul 2 — Instaleaza ExifTool (optional, recomandat)
+  Download: https://exiftool.org
+  Extrage exiftool(-k).exe → renumeste in exiftool.exe
+  Pune in C:\ffmpeg\bin\ sau alt folder din PATH
+
+Pasul 3 — Copiaza fisierele
+  Pune photo_encoder.ps1, photo_profiles.conf, photo_build_ultrahdr.ps1
+  intr-un folder la alegere (ex: C:\Scripts\PhotoEncoder\)
+
+Pasul 4 — Ruleaza
+  .\photo_encoder.ps1 -InputDir ".\Input" -OutputDir ".\Output" -Format avif -Preset web
+  sau fara argumente pentru meniu interactiv cu profile load/save
+
+
+═══════════════════════════════════════════════════════════════
+5. STRUCTURA FOLDERE
+═══════════════════════════════════════════════════════════════
+
+Termux (S24 Ultra):
+  /storage/emulated/0/
+  ├── Media/
+  │   ├── Scripts/
+  │   │   ├── photo_encoder.sh
+  │   │   ├── photo_launcher.sh
+  │   │   ├── photo_check.sh
+  │   │   ├── photo_build_ultrahdr.sh
+  │   │   └── photo_profiles.conf
+  │   ├── InputPhotos/       ← pune pozele aici
+  │   └── OutputPhotos/      ← rezultatele
+  └── DCIM/
+      └── Camera/            ← pozele direct din camera
+
+Windows:
+  C:\Scripts\PhotoEncoder\
+  ├── photo_encoder.ps1
+  ├── photo_profiles.conf
+  └── photo_build_ultrahdr.ps1
+
+
+═══════════════════════════════════════════════════════════════
+6. FLUX CONVERSIE — CUM FUNCTIONEAZA
+═══════════════════════════════════════════════════════════════
+
+  1. Scaneaza input → gaseste imagini suportate
+  2. Pre-scan: detecteaza iPhone Live Photo, Ultra HDR, DJI
+  3. Per fisier:
+     a. Skip duplicates (optional: --skip-duplicates)
+     b. Skip existing (optional: --skip-existing, pentru resume)
+     c. Min resolution filter (optional: --min-res)
+     d. Motion / Live Photo extraction (optional: -m)
+     e. UHDR handling (detect/strip/extract/decode)
+     f. DJI handling (detect/export/privacy-strip)
+     g. HDR detection + action (tonemap/preserve/passthrough)
+     h. Build ImageMagick command (resize, crop, quality, depth, etc.)
+     i. Convert cu ImageMagick
+     j. EXIF transfer (daca exiftool e disponibil)
+     k. Compression logging
+  4. Summary: statistici, compression report, durata
+
+
+═══════════════════════════════════════════════════════════════
+7. OPTIUNI DETALIATE
+═══════════════════════════════════════════════════════════════
+
+FORMAT & QUALITY:
+  -f, --format <fmt>     avif, webp, jpeg, heic, png, jxl (default: avif)
+  -q, --quality <1-100>  Manual quality (default: 80)
+  -p, --preset <name>    web | social | archive | print
+  --max-size <size>      Target max file size (500k, 2m)
+
+  Quality recomandat per format:
+    AVIF:  35-60 (web: 40, archive: 60)
+    WEBP:  70-90 (web: 75, archive: 90)
+    JPEG:  78-95 (social: 78, print: 97)
+    HEIC:  45-70 (web: 50, archive: 70)
+    JXL:   40-70 (web: 45, archive: 65) — JPEG XL, HDR nativ
+
+HDR & BIT DEPTH:
+  --depth <8|10|16>      Output bit depth (default: auto)
+  --force-sdr            Force tone map to SDR 8-bit
+  --force-hdr            Preserve HDR even pe JPEG/WEBP
+  (default: auto — tone map pe JPEG/WEBP, preserve pe AVIF/HEIC/PNG)
+
+RESIZE & CROP:
+  -r, --resize <WxH|W>  Resize (1920x1080, 1920)
+  --resize-mode <mode>   fit | fill | exact
+  --crop <ratio>         16:9, 4:3, 1:1, 9:16, 3:2
+
+WATERMARK:
+  --watermark-text <text>   Text watermark
+  --watermark-image <path>  Image watermark (logo)
+  --watermark-pos <pos>     NorthWest, SouthEast, Center, etc.
+  --watermark-opacity <n>   0-100 (default: 30)
+
+METADATA & COLOR:
+  --strip-exif / --keep-exif
+  --srgb                 Convert to sRGB color space
+  --auto-rotate / --no-auto-rotate
+
+OUTPUT NAMING:
+  --prefix <text>        Adauga prefix la output filename
+  --suffix <text>        Adauga suffix la output filename
+
+FILTERS:
+  --min-res <px>         Skip imagini sub aceasta rezolutie
+  --skip-duplicates      Skip fisiere cu hash identic
+  --lossless-jpeg        Optimizare lossless (doar JPEG→JPEG)
+
+MOTION / LIVE PHOTO:
+  -m, --extract-motion   Extrage video din Motion/Live Photo
+  --motion-only          DOAR extrage video (fara conversie poze)
+
+PROFILES & RESUME:
+  --profile <name>       Incarca profil din photo_profiles.conf
+  --skip-existing        Skip fisiere deja convertite (resume)
+  --watch                Monitorizeaza folder, converteste automat
+  --watch-interval <sec> Interval scanare watch mode (default: 5)
+
+  Profiles/ folder (SH + PS1 interactive — ca la AV Encoder Suite):
+    Cand SH/PS1 e rulat FARA argumente → meniu interactiv:
+    - La start: scaneaza Profiles/, afiseaza lista, incarca .conf
+    - La final: optiune save configuratia curenta in Profiles/
+    - Format: KEY=VALUE (editabil manual)
+    - Folder creat automat daca nu exista
+    - Dry-run: prompt interactiv "1-Normal / 2-Dry-run" inainte de conversie
+
+  Doua sisteme de profile (coexistente):
+    1. Profiles/*.conf — profile create de utilizator (interactive, save/load)
+    2. photo_profiles.conf — 22 profile predefinite (CLI --profile)
+
+PROCESSING:
+  --overwrite            Suprascrie fisiere existente
+  --no-recursive         Nu scaneaza subfoldere
+  --flat                 Output fara structura subfoldere
+  --dry-run              Simuleaza (nu converteste)
+  -v, --verbose          Output detaliat
+
+
+═══════════════════════════════════════════════════════════════
+8. ULTRA HDR (UHDR)
+═══════════════════════════════════════════════════════════════
+
+Ultra HDR = JPEG cu gain map incorporat. Dispozitive care genereaza:
+  - Samsung Galaxy S23/S24/S25: Super HDR
+  - Google Pixel 7/8/9: Ultra HDR
+  - Apple iPhone 14/15/16: Adaptive HDR (ISO 21496-1)
+
+5 actiuni disponibile:
+  --uhdr detect    Detecteaza UHDR, afiseaza tip (fara conversie)
+  --uhdr info      Info detaliat: version, gain map size, HDR capacity
+  --uhdr strip     Sterge gain map → JPEG mai mic, SDR only
+  --uhdr extract   Extrage gain map ca imagine separata (_gainmap.jpg)
+  --uhdr decode    Decodare COMPLETA cu libultrahdr → HDR real 10-bit
+                   (necesita ultrahdr_app — compilat cu photo_build_ultrahdr)
+
+Default (fara --uhdr): auto-detect, avertizare, converteste baza SDR normal.
+
+Exemple:
+  photo_encoder.sh -i ./DCIM -o ./out --uhdr detect
+  photo_encoder.sh -i ./DCIM -o ./stripped -f jpeg --uhdr strip
+  photo_encoder.sh -i ./DCIM -o ./hdr -f avif --uhdr decode --depth 10
+
+
+═══════════════════════════════════════════════════════════════
+9. DJI PHOTO
+═══════════════════════════════════════════════════════════════
+
+Suporta toate camerele DJI: Osmo Action, Mavic, Mini, Phantom, Air.
+
+3 actiuni:
+  --dji detect          Detecteaza poze DJI, afiseaza model + info
+  --dji export          Export metadata → dji_photo_metadata.csv (24 campuri)
+  --dji privacy-strip   Sterge: serial number, GPS, XMP-drone-dji, Make, Model
+
+DJI 4K Live Photo (video embedded in JPEG) se extrage cu -m flag.
+
+Exemple:
+  photo_encoder.sh -i ./DCIM -o ./out --dji detect
+  photo_encoder.sh -i ./DCIM -o ./csv --dji export
+  photo_encoder.sh -i ./DCIM -o ./clean -f jpeg --dji privacy-strip
+
+
+═══════════════════════════════════════════════════════════════
+10. PROFILES (photo_profiles.conf)
+═══════════════════════════════════════════════════════════════
+
+Fisier de configurare cu combinatii predefinite de flags.
+Format: profilename = flags
+Se cauta in: script dir → $HOME → Media/Scripts/
+
+22 profile predefinite:
+  Social Media: instagram, facebook, twitter, whatsapp, stories
+  Web:          web-gallery, web-thumb, web-4k
+  Archive:      archive, archive-full, archive-hdr
+  Print:        print-a4, print-poster
+  DJI:          dji-web, dji-clean, dji-archive
+  COCA Tattoo:  coca-web, coca-social, coca-portfolio
+  Quick:        quick-small, quick-medium, quick-large
+
+Exemple:
+  photo_encoder.sh -i ./DCIM -o ./out --profile instagram
+  photo_encoder.sh -i ./DCIM -o ./out --profile dji-web
+  photo_encoder.sh -i ./DCIM -o ./out --profile archive-hdr
+
+Profile custom — adauga in photo_profiles.conf:
+  myprofile = -f avif -q 50 -r 2000 --srgb --strip-exif
+
+
+═══════════════════════════════════════════════════════════════
+11. DIFERENTE INTRE PLATFORME
+═══════════════════════════════════════════════════════════════
+
+Feature                          SH (Termux)    PS1 (PowerShell)
+─────────────────────────────────────────────────────────────────
+Conversie batch                  ✓              ✓
+Quality presets                  ✓              ✓
+HDR detect + tonemap             ✓              ✓
+Ultra HDR (5 actiuni)            ✓              ✓
+DJI (detect/export/strip)        ✓              ✓
+Motion Photo extraction          ✓              ✓
+iPhone Live Photo                ✓              ✓
+DJI 4K Live Photo                ✓              ✓
+Profiles (--profile)             ✓              ✓
+Profiles/ save/load (interactive)✓              ✓
+Dry-run interactiv               ✓              ✓
+Skip existing (resume)           ✓              ✓
+Skip duplicates (SHA256)         ✓              ✓
+Lossless JPEG                    ✓              ✓
+Compression report               ✓              ✓
+Progress bar                     ✓              ✓
+Max-size retry loop              ✓              ✓
+Watch mode                       ✓              ✗
+HEIC/JXL output check            ✓              ✓
+Parallel jobs (ready)            ✓              ✗
+Launcher meniu                   ✓              ✗
+Check media photo                ✓              ✓
+
+Nota: .sh e engine-ul principal cu toate features. PS1 acopera
+90%+ din functionalitate — suficient pentru utilizare completa pe Windows.
+Ambele platforme au acum Profiles/ save/load interactiv si dry-run interactiv.
+
+
+═══════════════════════════════════════════════════════════════
+12. UTILIZARE RAPIDA (COMENZI PORNIRE)
+═══════════════════════════════════════════════════════════════
+
+Launcher (cel mai simplu):
+  bash photo_launcher.sh
+
+HEIC → JPEG universal:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Converted -f jpeg -q 90
+
+HEIC → AVIF pentru web:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Web -f avif -q 40 -r 1920
+
+Extrage Motion Photo + converteste:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Output -f jpeg -q 90 -m
+
+Doar extrage videourile din Motion Photo:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Videos --motion-only
+
+Cu profil:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Output --profile instagram
+
+Resume dupa intrerupere:
+  photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Output -f avif -p web --skip-existing
+
+Watch mode (monitorizeaza automat):
+  photo_encoder.sh -i /sdcard/Media/InputPhotos -o /sdcard/Media/OutputPhotos \
+    -f avif -p web --watch --watch-interval 5
+
+
+═══════════════════════════════════════════════════════════════
+13. COMENZI RAPIDE TERMUX
+═══════════════════════════════════════════════════════════════
+
+Editeaza script:
+  nano /storage/emulated/0/Media/Scripts/photo_encoder.sh
+
+Backup scripts:
+  cd /storage/emulated/0/Media/Scripts
+  tar czf ~/photo_encoder_backup.tar.gz photo_*.sh photo_*.conf
+
+Sterge output:
+  rm -rf /storage/emulated/0/Media/OutputPhotos/*
+
+Verifica versiune:
+  bash photo_encoder.sh --version
+
+Verifica dependinte:
+  magick --version
+  exiftool -ver
+  ultrahdr_app 2>&1 | head -1
+
+
+═══════════════════════════════════════════════════════════════
+14. TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════
+
+1. "ImageMagick not found"
+   → pkg install imagemagick -y (Termux)
+   → Reinstaleaza ImageMagick cu "Add to PATH" (Windows)
+
+2. "exiftool not found"
+   → pkg install perl && cpan Image::ExifTool (Termux)
+   → Download de pe exiftool.org (Windows)
+
+3. HEIC output nu merge
+   → pkg install libheif -y (Termux)
+   → Scriptul face fallback automat la AVIF daca libheif lipseste
+
+4. "Permission denied"
+   → chmod +x photo_encoder.sh photo_launcher.sh (Termux)
+   → Ruleaza PowerShell ca Administrator (Windows)
+
+5. Poze HDR apar spalacite (washed out)
+   → Foloseste --force-sdr pentru tone mapping explicit
+   → Sau --force-hdr cu -f avif/heic pentru pastrare HDR
+
+6. Ultra HDR — gain map nu se extrage
+   → Asigura-te ca exiftool e instalat
+   → Unele UHDR nu au MPF standard — fallback la binary extraction
+
+7. Motion Photo — video nu se extrage
+   → Verifica cu: file poza.jpg (trebuie sa arate "JPEG")
+   → Samsung: cauta marker "MotionPhoto_Data"
+   → Google: cauta "ftyp" box dupa JPEG data
+
+8. Output mai mare decat input
+   → AVIF/WEBP la quality mare poate fi mai mare decat JPEG
+   → Foloseste --max-size 500k pentru limita
+   → Sau --lossless-jpeg pentru optimizare fara pierdere
+
+9. Conversie lenta
+   → AVIF e cel mai lent encoder. Incearca WEBP pentru viteza.
+   → Reduce quality: -q 40 (AVIF) e suficient pentru web
+
+10. Profile nu se gaseste
+    → Verifica ca photo_profiles.conf e in acelasi folder cu scriptul
+    → Sau in $HOME sau in Media/Scripts/
+
+11. Watch mode nu detecteaza fisiere noi
+    → Verifica permisiunile pe folder
+    → Asteapta --watch-interval secunde (default 5s)
+
+12. PS1 nu porneste
+    → PS1: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+═══════════════════════════════════════════════════════════════

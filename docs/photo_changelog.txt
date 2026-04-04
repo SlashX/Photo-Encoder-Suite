@@ -1,0 +1,247 @@
+═══════════════════════════════════════════════════════════════
+  Photo Encoder Suite — CHANGELOG
+═══════════════════════════════════════════════════════════════
+
+
+v4.1 — Profile confirmation + token parser sync
+─────────────────────────────────────────────────
+  - SH+PS1: Profile load confirmation — dupa incarcarea unui profil din
+    Profiles/*.conf, afiseaza setarile si intreaba "Lanseaza cu aceste
+    setari? (D/n)". La anulare, reset la defaults si configurare manuala.
+    Aliniat cu AV Encoder Suite.
+  - PS1: Token parser photo_profiles.conf completat cu flags lipsa:
+    --resize-mode, --watermark-image, --watermark-pos, --watermark-opacity,
+    --keep-exif, --skip-existing, --overwrite, --no-recursive, --flat
+  - SH: parse_profile_args() completat cu flags lipsa:
+    --motion-only, --no-auto-rotate, --dji, --uhdr, --keep-exif,
+    --watermark-pos, --watermark-opacity, --skip-existing, --overwrite,
+    --no-recursive, --flat
+  - SH+PS1: Token parser-ele photo_profiles.conf sunt acum 100% sincronizate
+    — acelasi set de flags pe ambele platforme
+  - SH: load_profile_conf() — adaugat nota design despre compromisul
+    whitelist vs generic eval (securitate bash)
+
+
+v4.0 — Arhitectura unificata AV↔Photo — Profile + Dry-run interactiv
+──────────────────────────────────────────────────────────────────────
+  - PS1: Profile Load — rescris de la switch explicit (25 case-uri) la
+    Set-Variable generic + post-load mapping. Zero-maintenance: orice
+    parametru nou e automat suportat fara modificare cod load.
+  - PS1: Profile Save — format aliniat KEY=VALUE fara spatii (era Key = Value).
+    Compatibil cu formatul AV Encoder Suite.
+  - PS1: Dry-run interactiv — prompt "1-Normal / 2-Dry-run" inainte de
+    batch loop cand scriptul e rulat fara argumente (modul interactiv).
+    -DryRun CLI switch pastrat functional.
+  - SH: Profile Load interactiv — Profiles/*.conf load cu meniu
+    (identic cu PS1/AV). Se activeaza cand scriptul e rulat fara -i.
+    photo_profiles.conf (--profile CLI) pastrat separat.
+  - SH: Profile Save — save_profile_conf() la finalul procesarii
+    in modul interactiv. Format KEY=VALUE identic cu PS1.
+  - SH: load_profile_conf() — parser generic KEY=VALUE cu whitelist
+    de variabile cunoscute (securitate bash eval).
+  - SH: Dry-run interactiv — prompt identic cu PS1 inainte de
+    process_files cand e modul interactiv.
+  - Launcher: run_command() extins cu 3 optiuni: D-Normal / S-Dry-run / N-Anuleaza
+    (era doar D/n). Dry-run adauga --dry-run la comanda.
+  - Arhitectura profil unificata pe ambele platforme:
+    • Profiles/*.conf — profile user (interactive, load/save)
+    • photo_profiles.conf — profile predefinite (CLI --profile, read-only)
+
+
+v3.9 — photo_check.ps1 — Check Media Photo portat pe Windows
+──────────────────────────────────────────────────────────────
+  - Nou: photo_check.ps1 — port complet al photo_check.sh pe PowerShell
+  - 50 campuri CSV identice (EXIF, HDR, UHDR, DJI, GPS, Motion Photo)
+  - Terminal display colorat cu recomandari per imagine
+  - Suport: -Verbose, -CsvOnly, -NoRecursive
+  - Motion Photo detection: Samsung, Google, iPhone, DJI (binary scan)
+  - Proiectul are acum 10 fisiere (era 9)
+
+
+v3.8 — PS1 HEIC/JXL output check
+───────────────────────────────────
+  - PS1: HEIC output check — testeaza daca ImageMagick poate scrie HEIC,
+    fallback automat la AVIF daca libheif lipseste
+  - PS1: JXL output check — testeaza daca ImageMagick poate scrie JXL,
+    fallback automat la AVIF daca libjxl lipseste
+  - Identic cu logica din SH (check_heic_output_support)
+
+
+v3.7 — JPEG XL (.jxl) input + output support
+──────────────────────────────────────────────
+  - JXL adaugat ca format de input (JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL)
+  - JXL adaugat ca format de output (-f jxl)
+  - JXL quality presets: web=45, social=40, archive=65, print=70
+  - JXL marcat ca HDR capable (10-bit nativ, ca AVIF/HEIC)
+  - JXL output check la start: testeaza daca ImageMagick suporta JXL,
+    fallback automat la AVIF daca libjxl lipseste
+  - Launcher: optiune noua "6) JXL" in select_format
+  - PS1: JXL suportat identic cu SH (ValidateSet, presets, HDR depth)
+  - Info actualizat cu JXL in tabel formate si quality recomandat
+
+
+v3.6 — Drop BAT (CMD) — doar SH + PS1
+──────────────────────────────────────────
+  - Eliminat photo_encoder.bat si photo_build_ultrahdr.bat
+  - Proiectul are acum 9 fisiere (era 11)
+  - Windows: doar PowerShell (PS1) — acoperire 90%+ features
+  - Info actualizat: structura, setup, tabel platforme, troubleshooting
+  - Toate referintele BAT/CMD eliminate din documentatie
+
+
+v3.5 — PS1 lossless-jpeg + skip-duplicates implementate
+───────────────────────────────────────────────────────
+  - PS1: lossless-jpeg implementat in Convert-Photo (jpegtran sau magick -strip
+    fallback). Counter Lossless in summary.
+  - PS1: skip-duplicates era deja implementat (Get-FileHash SHA256) —
+    confirmat functional in audit.
+  - PS1: lossless counter adaugat in summary
+
+
+v3.4 — Audit fix: PS1 Mandatory param + profile count
+─────────────────────────────────────────────────────────
+  - FIX: PS1 [Parameter(Mandatory)] pe InputDir/OutputDir bloca modul
+    interactiv (Profiles/ load). Eliminat Mandatory, adaugat validare
+    explicita cu mesaj de eroare clar.
+  - FIX: profile count 23 → 22 in changelog si info (numarat gresit)
+  - Encoding: CRLF corectat pe photo_encoder.bat si .ps1
+
+
+v3.3 — BAT --no-recursive/--flat + max-size retry + PS1 compression report + progress
+──────────────────────────────────────────────────────────────────────────────────────
+  - BAT: --no-recursive si --flat implementate (inainte BAT era mereu recursiv)
+  - BAT: restructurat main loop in subroutina :process_file (call/goto :eof)
+  - BAT: --flat output path — toate fisierele in output root, fara subfoldere
+  - BAT: max-size retry loop (8 incercari, reduce quality pana la target size)
+  - PS1: compression report — Top 5 most/least compressed in summary
+  - PS1: progress bar vizual cu ████░░░░ in main loop
+  - PS1: skip-existing counter in summary (Already converted: N)
+  - Launcher: --skip-existing adaugat la optiunea 4 (Motion/Live Photo)
+
+
+v3.2 — BAT/PS1 Interactive Profile Save/Load (Profiles/ folder)
+─────────────────────────────────────────────────────────────────
+  - BAT: meniu interactiv la start — scaneaza Profiles/, afiseaza lista,
+    incarca .conf cu toate setarile (INPUT/OUTPUT/format/quality/etc.)
+  - BAT: save profile la final — salveaza configuratia curenta in
+    Profiles/numeprofile.conf cu toate flags-urile
+  - PS1: meniu interactiv la start — identic cu BAT, scaneaza Profiles/
+  - PS1: save profile la final — identic cu BAT
+  - Profiles/ folder creat automat daca nu exista
+  - Format .conf: key = value (citibil, editabil manual)
+  - Se activeaza automat cand scriptul e rulat fara argumente CLI
+  - Cu argumente CLI (ex: -i -o -f) — functioneaza ca inainte (fara meniu)
+
+
+v3.1 — BAT/PS1 Profile Loading din photo_profiles.conf
+─────────────────────────────────────────────────────────
+  - BAT: profile loading complet — parsare .conf, aplicare flags per token,
+    re-sync format/extensie, listare profile disponibile la eroare
+  - PS1: profile loading complet — citire .conf, split pe tokens, switch
+    per flag, recalculare $EffQ/$HdrMode dupa profil
+  - Toate 3 platformele (.sh/.bat/.ps1) suporta acum --profile identic
+  - Cautare .conf in: script dir → $HOME/%USERPROFILE%
+  - Eroare clara daca profilul nu exista + listare profile disponibile
+
+
+v3.0 — Full Audit + Cross-Platform Sync + Release Architecture
+─────────────────────────────────────────────────────────────────
+  - Release architecture: Photo_Encoder_Suite_vX.X (X=major, X=bugfix)
+  - Full audit pe toate 11 fisierele — cod, logica, consistenta
+  - FIX: PS1 syntax error — virgula lipsa intre $Verbose si $SkipExisting
+    in param block (PS1 NU PORNEA DELOC din v2.4)
+  - FIX: BAT --skip-existing — logica de skip nu era implementata in
+    main loop, doar flag-ul se parsea (fisierele se reconvertau mereu)
+  - FIX: Launcher 'local' in afara functiilor — 5 instante in case 3/9
+    care cauzau erori pe shell-uri stricte (dash, ash)
+  - SYNC: PS1 skip-existing logic adaugat (resume dupa intrerupere)
+  - SYNC: BAT/PS1 VERSION aliniat la 3.0.0 (era 2.4.0 dar header-ul
+    zicea v2.3 — desincronizat)
+  - SYNC: Toate header-urile actualizate la v3.0
+  - SYNC: BAT/PS1 profile loading din photo_profiles.conf implementat
+    (--profile instagram/web/dji/etc. functioneaza acum pe toate 3 platformele)
+  - UPDATE: photo_info.txt actualizat la v3.0 (11 fisiere,
+    +photo_profiles.conf documentat)
+  - UPDATE: photo_changelog.txt restructurat cu toate versiunile
+
+
+v2.4.0 — Profiles, Resume, Watch Mode, Compression Report
+───────────────────────────────────────────────────────────
+  - Profiles: --profile instagram/web/dji/coca/etc. din photo_profiles.conf
+    22 profile predefinite (instagram, facebook, whatsapp, web-gallery,
+    archive, dji-web, coca-web, print-a4, etc.)
+  - Skip existing / Resume: --skip-existing sare fisiere deja convertite
+    (output >0 bytes). Resume dupa intrerupere fara refacere.
+  - Watch mode: --watch monitorizeaza InputPhotos, converteste automat
+    pozele noi. --watch-interval 5 (default 5s). Ctrl+C opreste.
+  - Compression report: Top 5 most + least compressed in summary
+  - HEIC output check: testeaza libheif la start, fallback AVIF
+  - photo_profiles.conf: fisier configurare cu 22 profile predefinite
+  - Launcher: 10 optiuni (0-9) incl. profiles si watch mode
+  - --skip-existing adaugat automat in conversie rapida/avansata/profil
+
+
+v2.3.0 — DJI Photo Support + Check Media Photo
+─────────────────────────────────────────────────
+  - DJI Photo Detection: Make:DJI, XMP-drone-dji, Model (Osmo/Action/Mavic/etc.)
+  - DJI Metadata Export: 24 campuri CSV (GPS, speed, gimbal, flight, serial, firmware)
+  - DJI 4K Live Photo extraction: video embedded in JPEG (pe toate platformele)
+  - DJI Privacy Strip: sterge serial number, GPS, XMP-drone-dji, Make, Model
+  - photo_check.sh: analiza completa fisiere foto cu CSV 50 campuri
+  - Launcher: optiuni noi "5) DJI" + "7) Verifica fisiere foto"
+  - BAT/PS1: pause la erori, CRLF line endings, DJI Live Photo
+  - photo_info.txt rescris complet (13 capitole, setup Termux+Windows)
+  - Headers: Samsung / Google / iPhone / DJI pe toate fisierele
+
+
+v2.2.1 — AVIF input + Audit bugfixes + Arhitectura noua
+─────────────────────────────────────────────────────────
+  - AVIF adaugat ca format de input (AVIF → JPEG/WEBP/HEIC/PNG)
+  - Arhitectura noua: Media/Scripts/, InputPhotos/, OutputPhotos/
+  - Adaugat photo_launcher.sh, photo_build_ultrahdr.sh/.bat
+  - FIX: path-uri cu spatii (eval → MAGICK_ARGS array)
+  - FIX: HDR metadata || true pe tot && chain-ul
+  - FIX: BAT CHECK_UHDR persistent intre iteratii
+  - FIX: photo_check.sh variable scoping (local → global)
+  - FIX: BAT DJI export lipsa
+
+
+v2.2 — Ultra HDR (UHDR)
+────────────────────────
+  - Ultra HDR detection: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR
+  - 5 actiuni --uhdr: detect, info, strip, extract, decode
+  - Nivel 1 (exiftool) + Nivel 2 (libultrahdr)
+  - Pre-scan + Summary UHDR
+
+
+v2.1 — HDR complet
+───────────────────
+  - HDR detection: 4 metode (bit depth, BT.2020, PQ/HLG, EXIF)
+  - Auto tone mapping HDR→SDR, --force-sdr, --force-hdr
+  - Bit depth control: --depth 8/10/16
+  - HDR metadata transfer
+
+
+v2.0 — Professional Features (12 features noi)
+───────────────────────────────────────────────
+  - Quality presets, max file size, watermark text/image
+  - Crop, auto-rotate, sRGB, prefix/suffix
+  - Min-res filter, lossless JPEG, skip duplicates
+  - Progress bar, statistici detaliate
+
+
+v1.1 — iPhone Live Photo
+─────────────────────────
+  - iPhone Live Photo detection (companion MOV)
+  - Prioritate: iPhone → Samsung → Google
+  - Pre-scan + Summary separat
+
+
+v1.0 — Prima versiune
+──────────────────────
+  - Conversie batch: HEIC/JPEG/PNG/WEBP/TIFF/RAW → AVIF/WEBP/JPEG/HEIC/PNG
+  - Samsung Motion Photo + Google Motion Picture extraction
+  - ImageMagick engine, quality, resize, EXIF, dry-run
+  - 3 platforme: .sh (Termux), .bat (CMD), .ps1 (PowerShell)
+
+═══════════════════════════════════════════════════════════════
