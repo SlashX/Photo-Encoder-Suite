@@ -34,13 +34,16 @@ CUPRINS
   photo_launcher.sh          — Meniu interactiv (10 optiuni, 0-9)
   photo_encoder.sh           — Engine conversie (toate features-urile)
   photo_check.sh             — Analiza completa foto + CSV 50 campuri
-  photo_build_ultrahdr.sh    — Script compilare libultrahdr (optional)
 
   WINDOWS (PowerShell)
   ────────────────────
   photo_encoder.ps1          — Script PowerShell
-  photo_check.ps1              — Analiza completa foto + CSV 50 campuri
-  photo_build_ultrahdr.ps1   — Script compilare libultrahdr PS1 (optional)
+  photo_check.ps1            — Analiza completa foto + CSV 50 campuri
+
+  TOOLS (src/tools/) — Instalere & Compilare dependinte externe
+  ──────────────────────────────────────────────────────────────
+  tools/photo_build_ultrahdr.sh    — Script compilare libultrahdr (Termux, optional)
+  tools/photo_build_ultrahdr.ps1   — Script compilare libultrahdr (Windows, optional)
 
   CONFIGURARE
   ───────────
@@ -53,6 +56,8 @@ CUPRINS
 
 Nota: Scripturile Windows (PS1) sunt complet independente de cele bash.
       photo_profiles.conf e folosit de photo_encoder.sh cu --profile flag.
+      Scripturile din src/tools/ sunt standalone — se ruleaza manual, nu sunt
+      apelate din encodere. Pot fi rulate oricand pentru compilare/instalare.
 
 
 ═══════════════════════════════════════════════════════════════
@@ -75,8 +80,8 @@ OPTIONAL (recomandat):
     Windows: https://mozjpeg.codelove.de/binaries.html
 
   - libultrahdr       (ultrahdr_app — decodare completa Ultra HDR)
-    Compileaza cu: photo_build_ultrahdr.sh (Termux)
-                   photo_build_ultrahdr.ps1 (Windows)
+    Compileaza cu: ./tools/photo_build_ultrahdr.sh (Termux)
+                   .\tools\photo_build_ultrahdr.ps1 (Windows)
 
 
 ═══════════════════════════════════════════════════════════════

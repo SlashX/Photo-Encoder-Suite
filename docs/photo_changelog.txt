@@ -3,7 +3,14 @@
 ═══════════════════════════════════════════════════════════════
 
 
-v4.1 — Profile confirmation + token parser sync
+v4.1.1 — Reorganizare structura tools/
+───────────────────────────────────────
+  - [MOVE] photo_build_ultrahdr.sh/.ps1 → src/tools/
+  - [UPDATE] photo_info.txt — structura proiect actualizata
+  - [UPDATE] README.md — structura actualizata cu tools/
+
+
+
 ─────────────────────────────────────────────────
   - SH+PS1: Profile load confirmation — dupa incarcarea unui profil din
     Profiles/*.conf, afiseaza setarile si intreaba "Lanseaza cu aceste

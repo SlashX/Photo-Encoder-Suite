@@ -41,11 +41,12 @@ Photo-Encoder-Suite/
 │   ├── photo_launcher.sh           # Interactive menu — 10 options (Termux)
 │   ├── photo_encoder.sh            # Main conversion engine (Termux)
 │   ├── photo_check.sh              # Media analysis + 50-field CSV (Termux)
-│   ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
 │   ├── photo_encoder.ps1           # Main conversion engine (Windows)
 │   ├── photo_check.ps1             # Media analysis + 50-field CSV (Windows)
-│   ├── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
-│   └── photo_profiles.conf         # 22 predefined profiles
+│   ├── photo_profiles.conf         # 22 predefined profiles
+│   └── tools/
+│       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
+│       └── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
 ├── docs/
 │   ├── photo_info.txt              # Full setup & usage documentation
 │   └── photo_changelog.txt         # Version history
@@ -82,7 +83,7 @@ pkg install libjpeg-turbo -y                     # optional (lossless JPEG)
 
 ```bash
 # Set execute permissions
-chmod +x src/*.sh
+chmod +x src/*.sh src/tools/*.sh
 
 # Launch interactive menu
 cd src
@@ -181,8 +182,8 @@ Supports Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR.
 
 Build `libultrahdr` locally:
 ```bash
-./photo_build_ultrahdr.sh    # Termux
-.\photo_build_ultrahdr.ps1   # Windows
+./tools/photo_build_ultrahdr.sh    # Termux
+.\tools\photo_build_ultrahdr.ps1   # Windows
 ```
 
 ---
@@ -191,12 +192,12 @@ Build `libultrahdr` locally:
 
 | Problem | Solution |
 |---------|----------|
-| `Permission denied` on `.sh` | `chmod +x src/*.sh` |
+| `Permission denied` on `.sh` | `chmod +x src/*.sh src/tools/*.sh` |
 | `magick: command not found` | `pkg install imagemagick -y` (Termux) or install ImageMagick (Windows) |
 | PS1 script blocked | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
 | HEIC output not working | ImageMagick compiled without libheif — script auto-falls back to AVIF |
 | JXL output not working | ImageMagick compiled without libjxl — script auto-falls back to AVIF |
-| UHDR decode not working | Build libultrahdr with `photo_build_ultrahdr.sh` |
+| UHDR decode not working | Build libultrahdr with `./tools/photo_build_ultrahdr.sh` |
 | DJI GPS export empty | Image not filmed with GPS-enabled DJI RC or DJI Mimo app |
 
 ---
@@ -219,4 +220,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.1** — 10 files | 22 predefined profiles | bash/PS1 cross-platform
+Current: **v4.1.1** — 10 files | 22 predefined profiles | bash/PS1 cross-platform
