@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction, 22 presets and profile system — v4.1.1
+> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction, 22 presets and profile system — v4.1.2
 
 ---
 
@@ -43,7 +43,8 @@ Photo-Encoder-Suite/
 │   ├── photo_check.sh              # Media analysis + 50-field CSV (Termux)
 │   ├── photo_encoder.ps1           # Main conversion engine (Windows)
 │   ├── photo_check.ps1             # Media analysis + 50-field CSV (Windows)
-│   ├── photo_profiles.conf         # 22 predefined profiles
+│   ├── profiles/
+│   │   └── photo_profiles.conf         # 22 predefined profiles
 │   └── tools/
 │       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
 │       └── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
@@ -84,6 +85,8 @@ pkg install libjpeg-turbo -y                     # optional (lossless JPEG)
 ```bash
 # Set execute permissions
 chmod +x src/*.sh src/tools/*.sh
+
+# Folder structure: tools/ and profiles/ subfolders are auto-detected
 
 # Launch interactive menu
 cd src
@@ -135,7 +138,7 @@ cd src
 
 ## Predefined Profiles
 
-22 profiles available in `photo_profiles.conf`:
+22 profiles available in `profiles/photo_profiles.conf`:
 
 `instagram` · `facebook` · `whatsapp` · `web-gallery` · `web-fast` · `archive` · `archive-heic` · `dji-web` · `dji-archive` · `print-a4` · `print-large` · `thumbnail` · `social-story` · and more.
 
@@ -154,8 +157,9 @@ cd src
 - Save full configuration to `Profiles/*.conf` at end of session
 - Load saved profiles at next launch via interactive menu
 - Cross-platform format: `KEY=VALUE` — compatible bash/PS1
-- `photo_profiles.conf` — predefined profiles (read-only, CLI `--profile`)
-- `Profiles/` folder — user profiles (interactive, load/save)
+- Two separate locations:
+  - `profiles/` — predefined profiles (`photo_profiles.conf`, read-only, CLI `--profile`)
+  - `Profiles/` — user-saved profiles (interactive save/load, separate folder)
 
 ---
 
@@ -192,7 +196,7 @@ Build `libultrahdr` locally:
 
 | Problem | Solution |
 |---------|----------|
-| `Permission denied` on `.sh` | `chmod +x src/*.sh src/tools/*.sh` |
+| `Permission denied` on `.sh` | `chmod +x src/*.sh src/tools/*.sh` — profiles/ folder is read-only |
 | `magick: command not found` | `pkg install imagemagick -y` (Termux) or install ImageMagick (Windows) |
 | PS1 script blocked | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
 | HEIC output not working | ImageMagick compiled without libheif — script auto-falls back to AVIF |
@@ -220,4 +224,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.1.1** — 10 files | 22 predefined profiles | bash/PS1 cross-platform
+Current: **v4.1.2** — 10 files | 22 predefined profiles | bash/PS1 cross-platform

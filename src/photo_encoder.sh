@@ -17,13 +17,19 @@ set -euo pipefail
 
 VERSION="4.1"
 
+# ── Paths ───────────────────────────────────────────────────────────────────
+INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
+OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
+TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
+PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
+USER_PROFILES_DIR="/storage/emulated/0/Media/Profiles"
+
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
-INPUT_DIR=""; OUTPUT_DIR=""
 OUTPUT_FORMAT="avif"; QUALITY=80; QUALITY_PRESET=""; MAX_FILE_SIZE=""
 RESIZE=""; RESIZE_MODE="fit"; CROP_RATIO=""
 STRIP_EXIF="false"; AUTO_ROTATE="true"; SRGB_CONVERT="false"
@@ -48,6 +54,7 @@ BIT_DEPTH=""                  # "" (auto) | 8 | 10 | 16
 # ── Ultra HDR (UHDR) ────────────────────────────────────────────────────────
 UHDR_ACTION=""                # "" (auto-detect+warn) | detect | strip | extract | decode | info
 HAS_ULTRAHDR_APP="false"     # set in check_dependencies
+
 HAS_EXIFTOOL="false"
 
 # ── DJI ──────────────────────────────────────────────────────────────────────
@@ -240,16 +247,14 @@ get_file_hash() { $HASH_CMD "$1" 2>/dev/null | cut -d' ' -f1 || echo ""; }
 
 load_profile() {
     local profile_name="$1"
-    local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local conf_file="${script_dir}/photo_profiles.conf"
+    local conf_file="${PROFILES_DIR}/photo_profiles.conf"
 
-    # Also check input dir and home
+    # Also check home as fallback
     [[ ! -f "$conf_file" ]] && conf_file="$HOME/photo_profiles.conf"
-    [[ ! -f "$conf_file" ]] && conf_file="/storage/emulated/0/Media/Scripts/photo_profiles.conf"
 
     if [[ ! -f "$conf_file" ]]; then
         log_error "photo_profiles.conf not found. Create it with profiles."
-        log_info "Example: echo 'instagram = -f jpeg -p social -r 1080 --crop 1:1 --srgb' > $script_dir/photo_profiles.conf"
+        log_info "Example: echo 'instagram = -f jpeg -p social -r 1080 --crop 1:1 --srgb' > $PROFILES_DIR/photo_profiles.conf"
         exit 1
     fi
 
@@ -322,8 +327,8 @@ parse_profile_args() {
     done
 }
 
-# Load profile from Profiles/*.conf (KEY=VALUE format, generic eval)
-# Used by interactive mode (Profiles/ folder)
+# Load profile from profiles/*.conf (KEY=VALUE format, generic eval)
+# Used by interactive mode (profiles/ folder)
 # NOTE: Uses case/esac whitelist instead of generic eval for bash security.
 # Trade-off: new parameters must be added manually here AND in save_profile_conf().
 # PS1 uses Set-Variable (zero-maintenance) because PowerShell scope is safer.
@@ -374,16 +379,14 @@ load_profile_conf() {
 
 # Save current configuration to Profiles/*.conf (KEY=VALUE format)
 save_profile_conf() {
-    local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local profiles_dir="${script_dir}/Profiles"
-    mkdir -p "$profiles_dir"
+    mkdir -p "$USER_PROFILES_DIR"
 
     echo ""
     read -p "  Salvezi configuratia ca profil? (d/N) [N]: " save_choice
     if [[ "${save_choice,,}" == "d" ]]; then
         read -p "  Nume profil: " prof_name
         if [[ -n "$prof_name" ]]; then
-            local prof_file="${profiles_dir}/${prof_name}.conf"
+            local prof_file="${USER_PROFILES_DIR}/${prof_name}.conf"
             local hdr_val="$HDR_MODE"
             cat > "$prof_file" << EOF
 # Photo Encoder Profile: ${prof_name}
@@ -1496,20 +1499,35 @@ validate_args() {
 }
 
 main() {
+    local interactive_mode="false"
+
+    # ── Launch mode (when no args given on CLI) ──────────────────────────────
+    if [[ $# -eq 0 ]]; then
+        echo ""
+        echo -e "  ${WHITE}Input:${NC}  ${INPUT_DIR}"
+        echo -e "  ${WHITE}Output:${NC} ${OUTPUT_DIR}"
+        echo ""
+        echo -e "  ${GREEN}1)${NC} Normal      — encodeaza cu setarile default"
+        echo -e "  ${YELLOW}2)${NC} Dry-run     — doar analiza, fara conversie"
+        echo -e "  ${CYAN}3)${NC} Interactiv  — profile save/load, configurare manuala"
+        echo ""
+        read -p "  Alege [1-3, implicit=1]: " launch_choice
+        case "${launch_choice:-1}" in
+            2) DRY_RUN="true" ;;
+            3) interactive_mode="true" ;;
+        esac
+    fi
+
     parse_args "$@"
 
-    # ── Interactive Profiles/ load (when no InputDir given on CLI) ────────────
-    local interactive_mode="false"
-    if [[ -z "$INPUT_DIR" && -z "$PROFILE" ]]; then
-        interactive_mode="true"
-        local script_dir; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        local profiles_dir="${script_dir}/Profiles"
-        mkdir -p "$profiles_dir"
+    # ── Interactive Profiles/ load (option 3) ────────────────────────────────
+    if [[ "$interactive_mode" == "true" ]]; then
+        mkdir -p "$USER_PROFILES_DIR"
 
         local prof_files=()
         while IFS= read -r -d '' pf; do
             prof_files+=("$pf")
-        done < <(find "$profiles_dir" -maxdepth 1 -name "*.conf" -type f -print0 2>/dev/null | sort -z)
+        done < <(find "$USER_PROFILES_DIR" -maxdepth 1 -name "*.conf" -type f -print0 2>/dev/null | sort -z)
 
         if [[ ${#prof_files[@]} -gt 0 ]]; then
             echo ""
@@ -1536,8 +1554,8 @@ main() {
                     echo -e "  ${CYAN}────────────────────────────────────${NC}"
                     echo -e "  Format       : ${WHITE}${OUTPUT_FORMAT}${NC}"
                     [[ -n "$QUALITY_PRESET" ]] && echo -e "  Quality      : ${WHITE}${QUALITY_PRESET}${NC}" || echo -e "  Quality      : ${WHITE}${QUALITY}${NC}"
-                    [[ -n "$INPUT_DIR" ]]  && echo -e "  Input        : ${WHITE}${INPUT_DIR}${NC}"
-                    [[ -n "$OUTPUT_DIR" ]] && echo -e "  Output       : ${WHITE}${OUTPUT_DIR}${NC}"
+                    echo -e "  Input        : ${WHITE}${INPUT_DIR}${NC}"
+                    echo -e "  Output       : ${WHITE}${OUTPUT_DIR}${NC}"
                     [[ -n "$RESIZE" ]]     && echo -e "  Resize       : ${WHITE}${RESIZE}${NC}"
                     [[ -n "$CROP_RATIO" ]] && echo -e "  Crop         : ${WHITE}${CROP_RATIO}${NC}"
                     echo -e "  HDR          : ${WHITE}${HDR_MODE}${NC}"
@@ -1547,28 +1565,19 @@ main() {
                     read -p "  Lanseaza cu aceste setari? (D/n): " prof_confirm
                     if [[ "${prof_confirm,,}" == "n" ]]; then
                         echo -e "  ${YELLOW}Profil anulat — continuam cu configurare manuala.${NC}"
-                        # Reset to defaults
+                        # Reset to defaults (paths raman cele din Paths)
                         OUTPUT_FORMAT="avif"; QUALITY=80; QUALITY_PRESET=""; RESIZE=""; CROP_RATIO=""
                         HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""
                         STRIP_EXIF="false"; SRGB_CONVERT="false"; WATERMARK_TEXT=""
-                        INPUT_DIR=""; OUTPUT_DIR=""
                     else
                         log_info "Profil incarcat."
                     fi
                 fi
             fi
         else
-            echo -e "  ${GRAY}Niciun profil salvat. Foloseste Profiles/ pentru save/load.${NC}"
+            echo -e "  ${GRAY}Niciun profil salvat. Profilele se salveaza in Profiles/.${NC}"
         fi
 
-        # If still no input, ask interactively
-        if [[ -z "$INPUT_DIR" ]]; then
-            echo ""
-            read -p "  Input folder: " INPUT_DIR
-        fi
-        if [[ -z "$OUTPUT_DIR" ]]; then
-            read -p "  Output folder: " OUTPUT_DIR
-        fi
     fi
 
     # Load profile from photo_profiles.conf (CLI --profile flag)
@@ -1603,16 +1612,6 @@ main() {
     [[ "$EXTRACT_MOTION" == "true" ]] && echo -e "  Motion:     ${WHITE}Samsung + Google + iPhone + DJI${NC}"
     [[ "$DRY_RUN" == "true" ]] && echo -e "  ${YELLOW}DRY RUN${NC}"
     echo ""
-
-    # ── Dry-run / Mod lansare (interactive only) ─────────────────────────────
-    if [[ "$interactive_mode" == "true" && "$DRY_RUN" != "true" ]]; then
-        echo -e "${CYAN}Mod lansare: 1-Encodeaza normal [implicit]  2-Dry-run (doar analiza)${NC}"
-        read -p "Alege [implicit: 1]: " launch_mode
-        if [[ "$launch_mode" == "2" ]]; then
-            DRY_RUN="true"
-            echo -e "  ${YELLOW}MOD DRY-RUN: se afiseaza ce ar face fara sa converteasca.${NC}"
-        fi
-    fi
 
     # Watch mode — infinite loop monitoring
     if [[ "$WATCH_MODE" == "true" ]]; then

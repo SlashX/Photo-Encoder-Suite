@@ -53,15 +53,41 @@ param(
 $Version = "4.1"
 $ErrorActionPreference = "Stop"
 
-# ── Interactive Profile Load (when no InputDir given on command line) ────────
-$InteractiveMode = (-not $InputDir)
-if ($InteractiveMode) {
-    $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-    if (-not $ScriptPath) { $ScriptPath = Get-Location }
-    $ProfilesDir = Join-Path $ScriptPath "Profiles"
-    if (-not (Test-Path $ProfilesDir)) { New-Item -ItemType Directory -Force -Path $ProfilesDir | Out-Null }
+# ── Paths ───────────────────────────────────────────────────────────────────
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = Get-Location }
+$ToolsDir = Join-Path $ScriptDir "tools"
+$ProfilesDir = Join-Path $ScriptDir "profiles"
+$UserProfilesDir = Join-Path (Split-Path $ScriptDir -Parent) "Profiles"
 
-    $ProfileFiles = Get-ChildItem -Path $ProfilesDir -Filter "*.conf" -File -ErrorAction SilentlyContinue
+# ── Launch mode (when no args given on command line) ────────────────────────
+$InteractiveMode = $false
+if (-not $InputDir -and -not $Profile) {
+    Write-Host ""
+    Write-Host "  1) Normal      — encode with default settings" -ForegroundColor Green
+    Write-Host "  2) Dry-run     — analyze only, no conversion" -ForegroundColor Yellow
+    Write-Host "  3) Interactiv  — profile save/load, manual config" -ForegroundColor Cyan
+    Write-Host ""
+    $launchChoice = Read-Host "  Choose [1-3, default=1]"
+    switch ($launchChoice) {
+        "2" { $DryRun = $true }
+        "3" { $InteractiveMode = $true }
+    }
+
+    if (-not $InputDir) {
+        Write-Host ""
+        $InputDir = Read-Host "  Input folder"
+    }
+    if (-not $OutputDir) {
+        $OutputDir = Read-Host "  Output folder"
+    }
+}
+
+# ── Interactive Profiles/ load (option 3) ───────────────────────────────────
+if ($InteractiveMode) {
+    if (-not (Test-Path $UserProfilesDir)) { New-Item -ItemType Directory -Force -Path $UserProfilesDir | Out-Null }
+
+    $ProfileFiles = Get-ChildItem -Path $UserProfilesDir -Filter "*.conf" -File -ErrorAction SilentlyContinue
     if ($ProfileFiles.Count -gt 0) {
         Write-Host "`n  Saved profiles in Profiles\ folder:" -ForegroundColor White
         Write-Host "  ────────────────────────────────────" -ForegroundColor Cyan
@@ -104,8 +130,8 @@ if ($InteractiveMode) {
                 Write-Host "  ────────────────────────────────────" -ForegroundColor Cyan
                 Write-Host "  Format       : $Format" -ForegroundColor White
                 Write-Host "  Quality      : $(if ($Preset) { "$Preset" } else { $Quality })" -ForegroundColor White
-                if ($InputDir)  { Write-Host "  Input        : $InputDir" -ForegroundColor White }
-                if ($OutputDir) { Write-Host "  Output       : $OutputDir" -ForegroundColor White }
+                Write-Host "  Input        : $InputDir" -ForegroundColor White
+                Write-Host "  Output       : $OutputDir" -ForegroundColor White
                 if ($Resize)    { Write-Host "  Resize       : $Resize" -ForegroundColor White }
                 if ($Crop)      { Write-Host "  Crop         : $Crop" -ForegroundColor White }
                 $hdrDisp = if ($ForceSdr) { "force-sdr" } elseif ($ForceHdr) { "force-hdr" } else { "auto" }
@@ -120,34 +146,23 @@ if ($InteractiveMode) {
                     $Format = "avif"; $Quality = 80; $Preset = ""; $Resize = ""; $Crop = ""
                     $ForceSdr = $false; $ForceHdr = $false; $UHDR = ""; $DJI = ""
                     $StripExif = $false; $SRGB = $false; $WatermarkText = ""
-                    $InputDir = ""; $OutputDir = ""
                 } else {
                     Write-Host "  Profile loaded.`n" -ForegroundColor Green
                 }
             }
         }
     } else {
-        Write-Host "  No saved profiles found. Use Profiles\ folder to save/load." -ForegroundColor Gray
-    }
-
-    # If still no input, ask interactively
-    if (-not $InputDir) {
-        Write-Host ""
-        $InputDir = Read-Host "  Input folder"
-    }
-    if (-not $OutputDir) {
-        $OutputDir = Read-Host "  Output folder"
+        Write-Host "  No saved profiles found. Profiles are saved in Profiles\ folder." -ForegroundColor Gray
     }
 }
 
 # ── Load profile from photo_profiles.conf ────────────────────────────────────
 if ($Profile) {
-    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $ConfFile = Join-Path $ScriptDir "photo_profiles.conf"
+    $ConfFile = Join-Path $ProfilesDir "photo_profiles.conf"
     if (-not (Test-Path $ConfFile)) { $ConfFile = Join-Path $env:USERPROFILE "photo_profiles.conf" }
     if (-not (Test-Path $ConfFile)) {
         Write-Host "[ERROR] photo_profiles.conf not found." -ForegroundColor Red
-        Write-Host "  Place it next to this script or in $env:USERPROFILE" -ForegroundColor Yellow
+        Write-Host "  Place it in profiles\ folder next to this script or in $env:USERPROFILE" -ForegroundColor Yellow
         exit 1
     }
     $ProfileFound = $false
@@ -650,15 +665,6 @@ if ($DJI -eq "export") {
 
 $MaxB=if($MaxSize){Parse-SizeB $MaxSize}else{0}; $Cnt=0
 
-# ── Dry-run / Mod lansare (interactive only) ─────────────────────────────────
-if ($InteractiveMode -and -not $DryRun) {
-    Write-Host "Mod lansare: 1-Encodeaza normal [implicit]  2-Dry-run (doar analiza)" -ForegroundColor Cyan
-    $launchMode = Read-Host "Alege [implicit: 1]"
-    if ($launchMode -eq "2") {
-        $DryRun = $true
-        Write-Host "  MOD DRY-RUN: se afiseaza ce ar face fara sa converteasca." -ForegroundColor Yellow
-    }
-}
 
 foreach($F in $Files){
     $Cnt++; $Pct=[math]::Round($Cnt/$Total*100)
@@ -777,13 +783,10 @@ if ($InteractiveMode -and -not $DryRun) {
     Write-Host ""
     $saveChoice = Read-Host "  Save this configuration as profile? (Y/N) [N]"
     if ($saveChoice -eq "Y" -or $saveChoice -eq "y") {
-        $ScriptPath2 = Split-Path -Parent $MyInvocation.MyCommand.Path
-        if (-not $ScriptPath2) { $ScriptPath2 = Get-Location }
-        $ProfilesDir2 = Join-Path $ScriptPath2 "Profiles"
-        if (-not (Test-Path $ProfilesDir2)) { New-Item -ItemType Directory -Force -Path $ProfilesDir2 | Out-Null }
+        if (-not (Test-Path $UserProfilesDir)) { New-Item -ItemType Directory -Force -Path $UserProfilesDir | Out-Null }
         $saveName = Read-Host "  Profile name"
         if ($saveName) {
-            $saveFile = Join-Path $ProfilesDir2 "$saveName.conf"
+            $saveFile = Join-Path $UserProfilesDir "$saveName.conf"
             $hdrModeVal = if ($ForceSdr) { "force-sdr" } elseif ($ForceHdr) { "force-hdr" } else { "auto" }
             @(
                 "# Photo Encoder Profile: $saveName"

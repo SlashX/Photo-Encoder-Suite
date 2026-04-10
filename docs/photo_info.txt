@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.1.1
+  Photo Encoder Suite v4.1.2
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -45,9 +45,9 @@ CUPRINS
   tools/photo_build_ultrahdr.sh    — Script compilare libultrahdr (Termux, optional)
   tools/photo_build_ultrahdr.ps1   — Script compilare libultrahdr (Windows, optional)
 
-  CONFIGURARE
-  ───────────
-  photo_profiles.conf        — 22 profile predefinite (instagram, web, dji, etc.)
+  CONFIGURARE (src/profiles/)
+  ───────────────────────────
+  profiles/photo_profiles.conf — 22 profile predefinite (instagram, web, dji, etc.)
 
   DOCUMENTATIE
   ────────────
@@ -55,9 +55,12 @@ CUPRINS
   photo_changelog.txt        — Istoric versiuni
 
 Nota: Scripturile Windows (PS1) sunt complet independente de cele bash.
-      photo_profiles.conf e folosit de photo_encoder.sh cu --profile flag.
+      photo_profiles.conf e in folderul profiles/ — folosit cu --profile flag.
+      Profile user salvate sunt in Profiles/ separat (nu in profiles/).
       Scripturile din src/tools/ sunt standalone — se ruleaza manual, nu sunt
       apelate din encodere. Pot fi rulate oricand pentru compilare/instalare.
+      Toate variabilele de cai (TOOLS_DIR, PROFILES_DIR, USER_PROFILES_DIR)
+      sunt grupate la inceputul fiecarui script — cai complete, usor de editat.
 
 
 ═══════════════════════════════════════════════════════════════
@@ -104,10 +107,16 @@ Pasul 3 — Instaleaza dependinte
 
 Pasul 4 — Copiaza fisierele
   $ mkdir -p /storage/emulated/0/Media/Scripts
+  $ mkdir -p /storage/emulated/0/Media/Scripts/tools
+  $ mkdir -p /storage/emulated/0/Media/Scripts/profiles
   $ cp photo_encoder.sh photo_launcher.sh photo_check.sh \
-       photo_build_ultrahdr.sh photo_profiles.conf \
        /storage/emulated/0/Media/Scripts/
+  $ cp tools/photo_build_ultrahdr.sh \
+       /storage/emulated/0/Media/Scripts/tools/
+  $ cp profiles/photo_profiles.conf \
+       /storage/emulated/0/Media/Scripts/profiles/
   $ chmod +x /storage/emulated/0/Media/Scripts/*.sh
+  $ chmod +x /storage/emulated/0/Media/Scripts/tools/*.sh
 
 Pasul 5 — Ruleaza
   $ cd /storage/emulated/0/Media/Scripts
@@ -131,8 +140,10 @@ Pasul 2 — Instaleaza ExifTool (optional, recomandat)
   Pune in C:\ffmpeg\bin\ sau alt folder din PATH
 
 Pasul 3 — Copiaza fisierele
-  Pune photo_encoder.ps1, photo_profiles.conf, photo_build_ultrahdr.ps1
-  intr-un folder la alegere (ex: C:\Scripts\PhotoEncoder\)
+  Pune photo_encoder.ps1 intr-un folder la alegere (ex: C:\Scripts\PhotoEncoder\)
+  Creeaza subfolderele tools\ si profiles\ si copiaza:
+    tools\photo_build_ultrahdr.ps1
+    profiles\photo_profiles.conf
 
 Pasul 4 — Ruleaza
   .\photo_encoder.ps1 -InputDir ".\Input" -OutputDir ".\Output" -Format avif -Preset web
@@ -150,18 +161,24 @@ Termux (S24 Ultra):
   │   │   ├── photo_encoder.sh
   │   │   ├── photo_launcher.sh
   │   │   ├── photo_check.sh
-  │   │   ├── photo_build_ultrahdr.sh
-  │   │   └── photo_profiles.conf
-  │   ├── InputPhotos/       ← pune pozele aici
-  │   └── OutputPhotos/      ← rezultatele
+  │   │   ├── tools/
+  │   │   │   └── photo_build_ultrahdr.sh
+  │   │   └── profiles/
+  │   │       └── photo_profiles.conf   ← 22 profile predefinite (read-only)
+  │   ├── Profiles/              ← profile salvate de utilizator
+  │   ├── InputPhotos/           ← pune pozele aici
+  │   └── OutputPhotos/          ← rezultatele
   └── DCIM/
-      └── Camera/            ← pozele direct din camera
+      └── Camera/                ← pozele direct din camera
 
 Windows:
   C:\Scripts\PhotoEncoder\
   ├── photo_encoder.ps1
-  ├── photo_profiles.conf
-  └── photo_build_ultrahdr.ps1
+  ├── tools\
+  │   └── photo_build_ultrahdr.ps1
+  ├── profiles\
+  │   └── photo_profiles.conf       ← 22 profile predefinite (read-only)
+  └── Profiles\                      ← profile salvate de utilizator
 
 
 ═══════════════════════════════════════════════════════════════
@@ -243,17 +260,22 @@ PROFILES & RESUME:
   --watch                Monitorizeaza folder, converteste automat
   --watch-interval <sec> Interval scanare watch mode (default: 5)
 
-  Profiles/ folder (SH + PS1 interactive — ca la AV Encoder Suite):
-    Cand SH/PS1 e rulat FARA argumente → meniu interactiv:
+  Meniu lansare (SH + PS1 — cand e rulat FARA argumente CLI):
+    1) Normal      — encodeaza cu setarile default
+    2) Dry-run     — doar analiza, fara conversie
+    3) Interactiv  — profile save/load, configurare manuala
+
+  Profile interactive (modul Interactiv):
     - La start: scaneaza Profiles/, afiseaza lista, incarca .conf
     - La final: optiune save configuratia curenta in Profiles/
     - Format: KEY=VALUE (editabil manual)
     - Folder creat automat daca nu exista
-    - Dry-run: prompt interactiv "1-Normal / 2-Dry-run" inainte de conversie
 
-  Doua sisteme de profile (coexistente):
-    1. Profiles/*.conf — profile create de utilizator (interactive, save/load)
-    2. photo_profiles.conf — 22 profile predefinite (CLI --profile)
+  Doua locatii separate pentru profile:
+    - profiles/photo_profiles.conf — 22 profile predefinite (CLI --profile, read-only)
+    - Profiles/*.conf — profile salvate de utilizator (interactive, save/load)
+    Termux: /storage/emulated/0/Media/Profiles/
+    Windows: folder Profiles\ langa scriptul principal
 
 PROCESSING:
   --overwrite            Suprascrie fisiere existente
@@ -313,7 +335,7 @@ Exemple:
 
 Fisier de configurare cu combinatii predefinite de flags.
 Format: profilename = flags
-Se cauta in: script dir → $HOME → Media/Scripts/
+Se cauta in: profiles/ → $HOME → Media/Scripts/profiles/
 
 22 profile predefinite:
   Social Media: instagram, facebook, twitter, whatsapp, stories
@@ -329,7 +351,7 @@ Exemple:
   photo_encoder.sh -i ./DCIM -o ./out --profile dji-web
   photo_encoder.sh -i ./DCIM -o ./out --profile archive-hdr
 
-Profile custom — adauga in photo_profiles.conf:
+Profile custom — adauga in profiles/photo_profiles.conf:
   myprofile = -f avif -q 50 -r 2000 --srgb --strip-exif
 
 
@@ -349,7 +371,7 @@ iPhone Live Photo                ✓              ✓
 DJI 4K Live Photo                ✓              ✓
 Profiles (--profile)             ✓              ✓
 Profiles/ save/load (interactive)✓              ✓
-Dry-run interactiv               ✓              ✓
+Meniu lansare (3 optiuni)        ✓              ✓
 Skip existing (resume)           ✓              ✓
 Skip duplicates (SHA256)         ✓              ✓
 Lossless JPEG                    ✓              ✓
@@ -364,7 +386,8 @@ Check media photo                ✓              ✓
 
 Nota: .sh e engine-ul principal cu toate features. PS1 acopera
 90%+ din functionalitate — suficient pentru utilizare completa pe Windows.
-Ambele platforme au acum Profiles/ save/load interactiv si dry-run interactiv.
+Ambele platforme au meniu lansare cu 3 optiuni (Normal/Dry-run/Interactiv)
+si Profiles/ save/load interactiv.
 
 
 ═══════════════════════════════════════════════════════════════
@@ -406,7 +429,7 @@ Editeaza script:
 
 Backup scripts:
   cd /storage/emulated/0/Media/Scripts
-  tar czf ~/photo_encoder_backup.tar.gz photo_*.sh photo_*.conf
+  tar czf ~/photo_encoder_backup.tar.gz photo_*.sh tools/ profiles/
 
 Sterge output:
   rm -rf /storage/emulated/0/Media/OutputPhotos/*
@@ -462,9 +485,13 @@ Verifica dependinte:
    → AVIF e cel mai lent encoder. Incearca WEBP pentru viteza.
    → Reduce quality: -q 40 (AVIF) e suficient pentru web
 
-10. Profile nu se gaseste
-    → Verifica ca photo_profiles.conf e in acelasi folder cu scriptul
-    → Sau in $HOME sau in Media/Scripts/
+10. Profile predefinit nu se gaseste
+    → Verifica ca photo_profiles.conf e in folderul profiles/ langa script
+    → Sau in $HOME sau in Media/Scripts/profiles/
+    Profile user nu se gaseste
+    → Profile salvate sunt in Profiles/ (separat de profiles/)
+    → Termux: /storage/emulated/0/Media/Profiles/
+    → Windows: folder Profiles\ langa scriptul principal
 
 11. Watch mode nu detecteaza fisiere noi
     → Verifica permisiunile pe folder

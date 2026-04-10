@@ -8,8 +8,10 @@
 *.jxl
 *.heic
 
-# Profile salvate local
-Profiles/
+# Ignora orice .conf din profiles/ EXCEPTAND photo_profiles.conf (predefinite)
+# Profilele user sunt in Profiles/ separat (in afara repo-ului)
+src/profiles/*.conf
+!src/profiles/photo_profiles.conf
 
 # Windows
 Thumbs.db
@@ -31,3 +33,5 @@ __pycache__/
 
 # Claude Code
 CLAUDE.md
+
+.claude/

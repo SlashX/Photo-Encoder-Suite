@@ -12,16 +12,17 @@ set -euo pipefail
 ANDROID_DIR="/storage/emulated/0/Media/Scripts"
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
 OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
+PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 # ── Check encoder exists ────────────────────────────────────────────────────
-ENCODER="${SCRIPT_DIR}/photo_encoder.sh"
+ENCODER="${ANDROID_DIR}/photo_encoder.sh"
 if [[ ! -f "$ENCODER" ]]; then
-    echo -e "${RED}[ERROR]${NC} photo_encoder.sh nu a fost gasit in: $SCRIPT_DIR"
+    echo -e "${RED}[ERROR]${NC} photo_encoder.sh nu a fost gasit in: $ANDROID_DIR"
     echo "  Asigura-te ca photo_encoder.sh este in acelasi folder cu photo_launcher.sh"
     exit 1
 fi
@@ -269,7 +270,7 @@ while true; do
             # ── Profile ───────────────────────────────────────────────────
             echo ""
             echo -e "${WHITE}  Profile disponibile:${NC}"
-            conf="${SCRIPT_DIR}/photo_profiles.conf"
+            conf="${PROFILES_DIR}/photo_profiles.conf"
             if [[ ! -f "$conf" ]]; then
                 conf="$HOME/photo_profiles.conf"
             fi
@@ -282,7 +283,7 @@ while true; do
                 done < "$conf"
             else
                 echo -e "    ${RED}photo_profiles.conf nu exista.${NC}"
-                echo -e "    ${GRAY}Copiaza-l in: $SCRIPT_DIR/${NC}"
+                echo -e "    ${GRAY}Copiaza-l in: $PROFILES_DIR/${NC}"
             fi
             echo ""
             read -p "  Numele profilului (sau Enter pt anulare): " profile_name
@@ -380,9 +381,9 @@ while true; do
         9)
             # ── Check Media Photo ─────────────────────────────────────────
             echo ""
-            check_script="${SCRIPT_DIR}/photo_check.sh"
+            check_script="${ANDROID_DIR}/photo_check.sh"
             if [[ ! -f "$check_script" ]]; then
-                echo -e "${RED}  photo_check.sh nu a fost gasit in: $SCRIPT_DIR${NC}"
+                echo -e "${RED}  photo_check.sh nu a fost gasit in: $ANDROID_DIR${NC}"
             else
                 read -p "  Verbose (toate campurile)? (d/N) [N]: " check_verbose
                 check_flags=""

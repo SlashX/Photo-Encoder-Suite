@@ -3,6 +3,31 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.1.2 — Reorganizare folders + variabile cai centralizate
+───────────────────────────────────────────────────────────────
+  ADD photo_profiles.conf mutat in profiles/ subfolder (src/profiles/)
+  ADD tools/ subfolder pentru photo_build_ultrahdr scripts
+  ADD doua locatii separate pentru profile:
+    profiles/ — profile predefinite (photo_profiles.conf, read-only)
+    Profiles/ — profile salvate de utilizator (interactive save/load)
+    SH: USER_PROFILES_DIR="/storage/emulated/0/Media/Profiles"
+    PS1: $UserProfilesDir = Join-Path (Split-Path $ScriptDir) "Profiles"
+  ADD variabile de cai centralizate la inceputul fiecarui script:
+    SH: TOOLS_DIR, PROFILES_DIR, USER_PROFILES_DIR (cai absolute)
+    PS1: $ScriptDir, $ToolsDir, $ProfilesDir, $UserProfilesDir (dinamice)
+    Launcher: ANDROID_DIR, INPUT_DIR, OUTPUT_DIR, TOOLS_DIR, PROFILES_DIR
+    Eliminat SCRIPT_DIR din photo_encoder.sh (nefolosit)
+    Rutele nu mai sunt hardcodate in functii — usor de editat la top
+  ADD meniu lansare 3 optiuni (Normal / Dry-run / Interactiv) cand
+    SH/PS1 e rulat fara argumente CLI
+  UPDATE SH/PS1 load_profile — predefinite din PROFILES_DIR
+  UPDATE SH/PS1 save_profile, interactive load — din USER_PROFILES_DIR
+  UPDATE Launcher — foloseste PROFILES_DIR pentru photo_profiles.conf
+  UPDATE .gitignore — ignora profile user din profiles/ dar pastreaza
+    photo_profiles.conf tracked
+  UPDATE documentatie (photo_info.txt, README.md, CLAUDE.md)
+
+
   v4.1.1 — Reorganizare structura tools/
 ───────────────────────────────────────────────────────────────
   MOVE photo_build_ultrahdr.sh/.ps1 → src/tools/
