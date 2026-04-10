@@ -3,15 +3,47 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.1.3 — Audit complet + sync profile save/load + bugfix-uri
+───────────────────────────────────────────────────────────────
+  FIX README.md — tabel meniu launcher avea numerotare si optiuni gresite
+    (aliniat cu meniul real: 1-9 + 0=Exit, adaugat Lossless JPEG, scos Dry-run)
+  FIX photo_encoder.ps1 + photo_check.ps1 — extensia *.raw lipsea din
+    SupportedExtensions (era in SH, 19 extensii → acum identic pe ambele)
+  FIX photo_launcher.sh — file count header numara acum toate 19 extensiile
+    (lipseau jxl, raw, cr2, nef, arw, dng, orf, rw2)
+  FIX photo_check.sh — JXL lipsea din INPUT_EXTENSIONS (era in PS1/encoders)
+  FIX photo_check.sh — variabila $csv_file/${csv_file} redenumita $CSV_FILE
+    (consistenta cu conventie uppercase pentru variabile globale)
+  FIX README.md — tabel quality presets avea valori gresite (AVIF/WEBP/JPEG/HEIC)
+    aliniat cu valorile reale din get_preset_quality / Get-PresetQ
+  FIX README.md — lista profile predefinite avea nume inexistente, inlocuita
+    cu toate cele 22 profile reale din photo_profiles.conf
+  SYNC SH+PS1 save_profile — adaugat WatermarkImage, NoRecursive, Flat
+    (32 campuri KEY=VALUE pe ambele platforme)
+  SYNC SH load_profile_conf — adaugat WatermarkImage, NoRecursive, Flat
+    in whitelist (32 chei)
+  SYNC PS1 bool conversion list — adaugat NoRecursive, Flat (12 intrari)
+  SYNC photo_check.sh VERSION aliniat la "1.0" (era "1.0.0", PS1 avea "1.0")
+  ADD photo_check.sh — sectiune Paths centralizata la top
+    (INPUT_DIR, OUTPUT_DIR, CSV_FILE — aliniat cu photo_encoder.sh)
+  ADD photo_check.ps1 — $ScriptDir adaugat in sectiune Paths
+    (aliniat cu arhitectura photo_encoder.ps1)
+  ADD photo_check.ps1 — $CsvFile mutat sus, definitie unica centralizata
+  ADD Launcher — TERMUX_DIR + selectie director scripturi
+    (1-Termux / 2-Android, identic cu av_launcher.sh)
+    ENCODER si photo_check.sh folosesc $SCRIPT_DIR in loc de $ANDROID_DIR
+    Validare existenta scripturi in directorul ales
+
+
   v4.1.2 — Reorganizare folders + variabile cai centralizate
 ───────────────────────────────────────────────────────────────
   ADD photo_profiles.conf mutat in profiles/ subfolder (src/profiles/)
   ADD tools/ subfolder pentru photo_build_ultrahdr scripts
   ADD doua locatii separate pentru profile:
     profiles/ — profile predefinite (photo_profiles.conf, read-only)
-    Profiles/ — profile salvate de utilizator (interactive save/load)
-    SH: USER_PROFILES_DIR="/storage/emulated/0/Media/Profiles"
-    PS1: $UserProfilesDir = Join-Path (Split-Path $ScriptDir) "Profiles"
+    UserProfiles/ — profile salvate de utilizator (interactive save/load)
+    SH: USER_PROFILES_DIR="/storage/emulated/0/Media/UserProfiles"
+    PS1: $UserProfilesDir = Join-Path $ScriptDir "UserProfiles"
   ADD variabile de cai centralizate la inceputul fiecarui script:
     SH: TOOLS_DIR, PROFILES_DIR, USER_PROFILES_DIR (cai absolute)
     PS1: $ScriptDir, $ToolsDir, $ProfilesDir, $UserProfilesDir (dinamice)
@@ -25,7 +57,7 @@
   UPDATE Launcher — foloseste PROFILES_DIR pentru photo_profiles.conf
   UPDATE .gitignore — ignora profile user din profiles/ dar pastreaza
     photo_profiles.conf tracked
-  UPDATE documentatie (photo_info.txt, README.md, CLAUDE.md)
+  UPDATE documentatie (photo_info.txt, README.md)
 
 
   v4.1.1 — Reorganizare structura tools/

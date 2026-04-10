@@ -9,7 +9,7 @@
 *.heic
 
 # Ignora orice .conf din profiles/ EXCEPTAND photo_profiles.conf (predefinite)
-# Profilele user sunt in Profiles/ separat (in afara repo-ului)
+# Profilele user sunt in UserProfiles/ (creat automat de script)
 src/profiles/*.conf
 !src/profiles/photo_profiles.conf
 

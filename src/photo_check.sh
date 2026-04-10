@@ -10,22 +10,25 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; MAGENTA='\033[0;35m'
 NC='\033[0m'
 
+# ── Paths ────────────────────────────────────────────────────────────────────
+INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
+OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
+CSV_FILE="${OUTPUT_DIR}/photo_check_report.csv"
+
 # ── Defaults ─────────────────────────────────────────────────────────────────
-INPUT_DIR=""
-OUTPUT_DIR=""
 RECURSIVE="true"
 VERBOSE="false"
 CSV_ONLY="false"
 
 # ── Supported formats ────────────────────────────────────────────────────────
-INPUT_EXTENSIONS="jpg jpeg png heic heif avif webp tiff tif bmp gif raw cr2 nef arw dng orf rw2"
+INPUT_EXTENSIONS="jpg jpeg png heic heif avif webp jxl tiff tif bmp gif raw cr2 nef arw dng orf rw2"
 
 # ── Dependency check ─────────────────────────────────────────────────────────
 HAS_EXIFTOOL="false"
@@ -397,10 +400,9 @@ main() {
     print_header
     check_dependencies
 
-    [[ -z "$INPUT_DIR" ]] && { echo -e "${RED}[ERROR]${NC} Input required (-i)"; exit 1; }
     [[ ! -d "$INPUT_DIR" ]] && { echo -e "${RED}[ERROR]${NC} Not found: $INPUT_DIR"; exit 1; }
-    [[ -z "$OUTPUT_DIR" ]] && OUTPUT_DIR="$INPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
+    CSV_FILE="${OUTPUT_DIR}/photo_check_report.csv"
 
     echo -e "  Input:    ${WHITE}${INPUT_DIR}${NC}"
     echo -e "  Output:   ${WHITE}${OUTPUT_DIR}${NC}"
@@ -422,8 +424,7 @@ main() {
     echo ""
 
     # CSV header
-    local csv_file="${OUTPUT_DIR}/photo_check_report.csv"
-    echo "Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" > "$csv_file"
+    echo "Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" > "$CSV_FILE"
 
     # Counters
     local count=0
@@ -436,7 +437,7 @@ main() {
         [[ "$CSV_ONLY" != "true" ]] && printf "\r${GRAY}[%d/%d]${NC} Analyzing..." "$count" "$total"
 
         analyze_image "$file"
-        echo "$CSV_ROW" >> "$csv_file"
+        echo "$CSV_ROW" >> "$CSV_FILE"
 
         # Count stats from last analysis
         local fsz; fsz=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo 0)
@@ -464,7 +465,7 @@ main() {
     [[ $cnt_motion -gt 0 ]] && echo -e "  Motion/Live Photo:  ${CYAN}${cnt_motion}${NC}"
     [[ $cnt_gps -gt 0 ]]    && echo -e "  With GPS:           ${WHITE}${cnt_gps}${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
-    echo -e "  CSV:  ${WHITE}${csv_file}${NC}"
+    echo -e "  CSV:  ${WHITE}${CSV_FILE}${NC}"
     echo -e "        ${GRAY}50 campuri per imagine (deschide in Excel/Google Sheets)${NC}"
     echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
     echo ""

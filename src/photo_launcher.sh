@@ -9,6 +9,7 @@
 set -euo pipefail
 
 # ── Paths ────────────────────────────────────────────────────────────────────
+TERMUX_DIR="$HOME"
 ANDROID_DIR="/storage/emulated/0/Media/Scripts"
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
 OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
@@ -19,13 +20,24 @@ PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; NC='\033[0m'
 
-# ── Check encoder exists ────────────────────────────────────────────────────
-ENCODER="${ANDROID_DIR}/photo_encoder.sh"
-if [[ ! -f "$ENCODER" ]]; then
-    echo -e "${RED}[ERROR]${NC} photo_encoder.sh nu a fost gasit in: $ANDROID_DIR"
-    echo "  Asigura-te ca photo_encoder.sh este in acelasi folder cu photo_launcher.sh"
-    exit 1
-fi
+# ── Director scripturi ────────────────────────────────────────────────────
+echo ""
+echo -e "De unde vrei sa rulezi scripturile?"
+echo -e "  ${GREEN}1)${NC} Termux ($TERMUX_DIR)"
+echo -e "  ${GREEN}2)${NC} Folder Android ($ANDROID_DIR)"
+read -p "Introdu 1 sau 2: " location_choice
+if   [[ "$location_choice" == "1" ]]; then SCRIPT_DIR="$TERMUX_DIR"
+elif [[ "$location_choice" == "2" ]]; then SCRIPT_DIR="$ANDROID_DIR"
+else echo "Optiune invalida. Iesi..."; exit 1; fi
+
+for script in photo_encoder.sh photo_check.sh; do
+    if [[ ! -f "$SCRIPT_DIR/$script" ]]; then
+        echo -e "${RED}[ERROR]${NC} $script nu a fost gasit in: $SCRIPT_DIR"
+        exit 1
+    fi
+done
+
+ENCODER="${SCRIPT_DIR}/photo_encoder.sh"
 
 # ── Create folders ───────────────────────────────────────────────────────────
 mkdir -p "$INPUT_DIR" "$OUTPUT_DIR"
@@ -45,7 +57,7 @@ print_header() {
 
     # Count files
     local count=0
-    for ext in jpg jpeg png heic heif avif webp tiff tif bmp gif; do
+    for ext in jpg jpeg png heic heif avif webp jxl tiff tif bmp gif raw cr2 nef arw dng orf rw2; do
         count=$((count + $(find "$INPUT_DIR" -maxdepth 1 -iname "*.${ext}" 2>/dev/null | wc -l)))
     done
     echo -e "  Fisiere: ${WHITE}${count}${NC} imagini in Input"
@@ -381,9 +393,9 @@ while true; do
         9)
             # ── Check Media Photo ─────────────────────────────────────────
             echo ""
-            check_script="${ANDROID_DIR}/photo_check.sh"
+            check_script="${SCRIPT_DIR}/photo_check.sh"
             if [[ ! -f "$check_script" ]]; then
-                echo -e "${RED}  photo_check.sh nu a fost gasit in: $ANDROID_DIR${NC}"
+                echo -e "${RED}  photo_check.sh nu a fost gasit in: $SCRIPT_DIR${NC}"
             else
                 read -p "  Verbose (toate campurile)? (d/N) [N]: " check_verbose
                 check_flags=""

@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.1 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.1.3 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
-    Input:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW
-    Output: AVIF/WEBP/JPEG/HEIC/PNG
+    Input:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/JXL
+    Output: AVIF/WEBP/JPEG/HEIC/PNG/JXL
 .EXAMPLE
     .\photo_encoder.ps1 -InputDir ".\photos" -OutputDir ".\web" -Format avif -Preset web
     .\photo_encoder.ps1 -InputDir ".\photos" -OutputDir ".\stripped" -Format jpeg -UHDR strip
@@ -50,7 +50,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.1"
+$Version = "4.1.3"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ScriptDir) { $ScriptDir = Get-Location }
 $ToolsDir = Join-Path $ScriptDir "tools"
 $ProfilesDir = Join-Path $ScriptDir "profiles"
-$UserProfilesDir = Join-Path (Split-Path $ScriptDir -Parent) "Profiles"
+$UserProfilesDir = Join-Path $ScriptDir "UserProfiles"
 
 # ── Launch mode (when no args given on command line) ────────────────────────
 $InteractiveMode = $false
@@ -83,13 +83,13 @@ if (-not $InputDir -and -not $Profile) {
     }
 }
 
-# ── Interactive Profiles/ load (option 3) ───────────────────────────────────
+# ── Interactive UserProfiles/ load (option 3) ──────────────────────────────
 if ($InteractiveMode) {
     if (-not (Test-Path $UserProfilesDir)) { New-Item -ItemType Directory -Force -Path $UserProfilesDir | Out-Null }
 
     $ProfileFiles = Get-ChildItem -Path $UserProfilesDir -Filter "*.conf" -File -ErrorAction SilentlyContinue
     if ($ProfileFiles.Count -gt 0) {
-        Write-Host "`n  Saved profiles in Profiles\ folder:" -ForegroundColor White
+        Write-Host "`n  Saved profiles in UserProfiles\ folder:" -ForegroundColor White
         Write-Host "  ────────────────────────────────────" -ForegroundColor Cyan
         $idx = 0
         foreach ($pf in $ProfileFiles) {
@@ -120,7 +120,7 @@ if ($InteractiveMode) {
                 if ($HdrMode -eq "force-sdr") { $ForceSdr = $true }
                 if ($HdrMode -eq "force-hdr") { $ForceHdr = $true }
                 foreach ($boolVar in @("StripExif","SRGB","NoAutoRotate","SkipDuplicates",
-                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","Verbose")) {
+                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose")) {
                     if ((Get-Variable -Name $boolVar -ValueOnly -ErrorAction SilentlyContinue) -eq "true") {
                         Set-Variable -Name $boolVar -Value $true -Scope Script
                     }
@@ -152,7 +152,7 @@ if ($InteractiveMode) {
             }
         }
     } else {
-        Write-Host "  No saved profiles found. Profiles are saved in Profiles\ folder." -ForegroundColor Gray
+        Write-Host "  No saved profiles found. Profiles are saved in UserProfiles\ folder." -ForegroundColor Gray
     }
 }
 
@@ -238,7 +238,7 @@ $HdrMode = if ($ForceSdr) { "force-sdr" } elseif ($ForceHdr) { "force-hdr" } els
 $HdrCapable = @("avif","heic","png","jxl")
 $UhdrExts = @(".jpg",".jpeg")
 
-$SupportedExtensions = @("*.jpg","*.jpeg","*.png","*.heic","*.heif","*.avif","*.webp","*.jxl","*.tiff","*.tif","*.bmp","*.gif","*.cr2","*.nef","*.arw","*.dng","*.orf","*.rw2")
+$SupportedExtensions = @("*.jpg","*.jpeg","*.png","*.heic","*.heif","*.avif","*.webp","*.jxl","*.tiff","*.tif","*.bmp","*.gif","*.raw","*.cr2","*.nef","*.arw","*.dng","*.orf","*.rw2")
 $MotionExtensions = @(".jpg",".jpeg",".heic",".heif")
 
 $HasExiftool = [bool](Get-Command "exiftool" -ErrorAction SilentlyContinue)
@@ -808,8 +808,11 @@ if ($InteractiveMode -and -not $DryRun) {
                 "SRGB=$($SRGB.ToString().ToLower())"
                 "NoAutoRotate=$($NoAutoRotate.ToString().ToLower())"
                 "WatermarkText=$WatermarkText"
+                "WatermarkImage=$WatermarkImage"
                 "WatermarkPos=$WatermarkPos"
                 "WatermarkOpacity=$WatermarkOpacity"
+                "NoRecursive=$($NoRecursive.ToString().ToLower())"
+                "Flat=$($Flat.ToString().ToLower())"
                 "Prefix=$Prefix"
                 "Suffix=$Suffix"
                 "MinRes=$MinRes"

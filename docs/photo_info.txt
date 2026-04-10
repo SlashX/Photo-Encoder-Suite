@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.1.2
+  Photo Encoder Suite v4.1.3
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -56,7 +56,7 @@ CUPRINS
 
 Nota: Scripturile Windows (PS1) sunt complet independente de cele bash.
       photo_profiles.conf e in folderul profiles/ — folosit cu --profile flag.
-      Profile user salvate sunt in Profiles/ separat (nu in profiles/).
+      Profile user salvate sunt in UserProfiles/ separat (nu in profiles/).
       Scripturile din src/tools/ sunt standalone — se ruleaza manual, nu sunt
       apelate din encodere. Pot fi rulate oricand pentru compilare/instalare.
       Toate variabilele de cai (TOOLS_DIR, PROFILES_DIR, USER_PROFILES_DIR)
@@ -165,20 +165,21 @@ Termux (S24 Ultra):
   │   │   │   └── photo_build_ultrahdr.sh
   │   │   └── profiles/
   │   │       └── photo_profiles.conf   ← 22 profile predefinite (read-only)
-  │   ├── Profiles/              ← profile salvate de utilizator
+  │   ├── UserProfiles/           ← profile salvate de utilizator
   │   ├── InputPhotos/           ← pune pozele aici
   │   └── OutputPhotos/          ← rezultatele
   └── DCIM/
       └── Camera/                ← pozele direct din camera
 
 Windows:
-  C:\Scripts\PhotoEncoder\
+  src\
   ├── photo_encoder.ps1
+  ├── photo_check.ps1
   ├── tools\
   │   └── photo_build_ultrahdr.ps1
   ├── profiles\
   │   └── photo_profiles.conf       ← 22 profile predefinite (read-only)
-  └── Profiles\                      ← profile salvate de utilizator
+  └── UserProfiles\                  ← profile salvate de utilizator
 
 
 ═══════════════════════════════════════════════════════════════
@@ -266,15 +267,15 @@ PROFILES & RESUME:
     3) Interactiv  — profile save/load, configurare manuala
 
   Profile interactive (modul Interactiv):
-    - La start: scaneaza Profiles/, afiseaza lista, incarca .conf
-    - La final: optiune save configuratia curenta in Profiles/
+    - La start: scaneaza UserProfiles/, afiseaza lista, incarca .conf
+    - La final: optiune save configuratia curenta in UserProfiles/
     - Format: KEY=VALUE (editabil manual)
     - Folder creat automat daca nu exista
 
   Doua locatii separate pentru profile:
     - profiles/photo_profiles.conf — 22 profile predefinite (CLI --profile, read-only)
-    - Profiles/*.conf — profile salvate de utilizator (interactive, save/load)
-    Termux: /storage/emulated/0/Media/Profiles/
+    - UserProfiles/*.conf — profile salvate de utilizator (interactive, save/load)
+    Termux: /storage/emulated/0/Media/UserProfiles/
     Windows: folder Profiles\ langa scriptul principal
 
 PROCESSING:
@@ -370,7 +371,7 @@ Motion Photo extraction          ✓              ✓
 iPhone Live Photo                ✓              ✓
 DJI 4K Live Photo                ✓              ✓
 Profiles (--profile)             ✓              ✓
-Profiles/ save/load (interactive)✓              ✓
+UserProfiles/ save/load (interac)✓              ✓
 Meniu lansare (3 optiuni)        ✓              ✓
 Skip existing (resume)           ✓              ✓
 Skip duplicates (SHA256)         ✓              ✓
@@ -387,7 +388,7 @@ Check media photo                ✓              ✓
 Nota: .sh e engine-ul principal cu toate features. PS1 acopera
 90%+ din functionalitate — suficient pentru utilizare completa pe Windows.
 Ambele platforme au meniu lansare cu 3 optiuni (Normal/Dry-run/Interactiv)
-si Profiles/ save/load interactiv.
+si UserProfiles/ save/load interactiv.
 
 
 ═══════════════════════════════════════════════════════════════
@@ -489,8 +490,8 @@ Verifica dependinte:
     → Verifica ca photo_profiles.conf e in folderul profiles/ langa script
     → Sau in $HOME sau in Media/Scripts/profiles/
     Profile user nu se gaseste
-    → Profile salvate sunt in Profiles/ (separat de profiles/)
-    → Termux: /storage/emulated/0/Media/Profiles/
+    → Profile salvate sunt in UserProfiles/ (separat de profiles/)
+    → Termux: /storage/emulated/0/Media/UserProfiles/
     → Windows: folder Profiles\ langa scriptul principal
 
 11. Watch mode nu detecteaza fisiere noi

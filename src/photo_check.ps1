@@ -23,7 +23,11 @@ param(
 $Version = "1.0"
 $ErrorActionPreference = "Stop"
 
-$SupportedExtensions = @("*.jpg","*.jpeg","*.png","*.heic","*.heif","*.avif","*.webp","*.jxl","*.tiff","*.tif","*.bmp","*.gif","*.cr2","*.nef","*.arw","*.dng","*.orf","*.rw2")
+# ── Paths ───────────────────────────────────────────────────────────────────
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = Get-Location }
+
+$SupportedExtensions = @("*.jpg","*.jpeg","*.png","*.heic","*.heif","*.avif","*.webp","*.jxl","*.tiff","*.tif","*.bmp","*.gif","*.raw","*.cr2","*.nef","*.arw","*.dng","*.orf","*.rw2")
 $HasExiftool = [bool](Get-Command "exiftool" -ErrorAction SilentlyContinue)
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -40,6 +44,7 @@ if (-not (Test-Path $InputDir -PathType Container)) {
 }
 if (-not $OutputDir) { $OutputDir = $InputDir }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+$CsvFile = Join-Path $OutputDir "photo_check_report.csv"
 if (-not $HasExiftool) {
     Write-Host "[WARN] exiftool not found. Analiza va fi limitata (doar ImageMagick)." -ForegroundColor Yellow
 }
@@ -92,7 +97,6 @@ Write-Host "[INFO] Found $Total image(s) to analyze" -ForegroundColor Green
 Write-Host ""
 
 # ── CSV header ───────────────────────────────────────────────────────────────
-$CsvFile = Join-Path $OutputDir "photo_check_report.csv"
 "Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" | Out-File $CsvFile -Encoding utf8
 
 # ── Counters ─────────────────────────────────────────────────────────────────

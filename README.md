@@ -2,14 +2,14 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction, 22 presets and profile system — v4.1.2
+> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction, 22 presets and profile system — v4.1.3
 
 ---
 
 ## Features
 
 - **6 output formats**: AVIF, WEBP, JPEG, HEIC, PNG, JPEG XL (.jxl)
-- **7 input formats**: HEIC, JPEG, PNG, WEBP, TIFF, RAW/DNG, JXL, AVIF
+- **8 input formats**: HEIC, JPEG, PNG, WEBP, TIFF, RAW/DNG, JXL, AVIF
 - **Motion Photo support**: Samsung, Google, iPhone Live Photo, DJI 4K Live Photo extraction
 - **Ultra HDR (UHDR)**: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR — detect, info, strip, extract, decode
 - **HDR processing**: auto tone mapping HDR→SDR, force HDR/SDR, bit depth control (8/10/16-bit)
@@ -110,16 +110,16 @@ cd src
 
 | Option | Description |
 |--------|-------------|
-| 0 | Quick convert (format + quality only) |
-| 1 | Advanced convert (all options) |
-| 2 | Convert with profile (photo_profiles.conf) |
-| 3 | Dry-run (preview without converting) |
+| 1 | Quick convert (format + quality only) |
+| 2 | Advanced convert (all options) |
+| 3 | Convert with profile (instagram, web, dji, etc.) |
 | 4 | Motion / Live Photo extraction |
-| 5 | DJI Photo (metadata export + privacy strip) |
-| 6 | Ultra HDR (detect, strip, extract, decode) |
-| 7 | Check media files (analysis + CSV export) |
+| 5 | Ultra HDR (detect, strip, extract, decode) |
+| 6 | DJI Photo (metadata export + privacy strip) |
+| 7 | Lossless JPEG optimization |
 | 8 | Watch mode (auto-convert new photos) |
-| 9 | Exit |
+| 9 | Check media files (analysis + CSV export) |
+| 0 | Exit |
 
 ---
 
@@ -127,10 +127,10 @@ cd src
 
 | Format | web | social | archive | print | HDR capable |
 |--------|-----|--------|---------|-------|-------------|
-| AVIF | 55 | 50 | 75 | 85 | ✅ |
-| WEBP | 80 | 75 | 90 | 95 | — |
-| JPEG | 82 | 78 | 92 | 95 | — |
-| HEIC | 60 | 55 | 78 | 88 | ✅ |
+| AVIF | 40 | 35 | 60 | 65 | ✅ |
+| WEBP | 75 | 70 | 90 | 92 | — |
+| JPEG | 82 | 78 | 95 | 97 | — |
+| HEIC | 50 | 45 | 70 | 75 | ✅ |
 | PNG | — | — | lossless | lossless | — |
 | JXL | 45 | 40 | 65 | 70 | ✅ |
 
@@ -140,7 +140,7 @@ cd src
 
 22 profiles available in `profiles/photo_profiles.conf`:
 
-`instagram` · `facebook` · `whatsapp` · `web-gallery` · `web-fast` · `archive` · `archive-heic` · `dji-web` · `dji-archive` · `print-a4` · `print-large` · `thumbnail` · `social-story` · and more.
+`instagram` · `facebook` · `twitter` · `whatsapp` · `stories` · `web-gallery` · `web-thumb` · `web-4k` · `archive` · `archive-full` · `archive-hdr` · `print-a4` · `print-poster` · `dji-web` · `dji-clean` · `dji-archive` · `coca-web` · `coca-social` · `coca-portfolio` · `quick-small` · `quick-medium` · `quick-large`
 
 ```bash
 # Use a profile (Termux)
@@ -154,12 +154,12 @@ cd src
 
 ## Profile System (save/load)
 
-- Save full configuration to `Profiles/*.conf` at end of session
+- Save full configuration to `UserProfiles/*.conf` at end of session
 - Load saved profiles at next launch via interactive menu
 - Cross-platform format: `KEY=VALUE` — compatible bash/PS1
 - Two separate locations:
   - `profiles/` — predefined profiles (`photo_profiles.conf`, read-only, CLI `--profile`)
-  - `Profiles/` — user-saved profiles (interactive save/load, separate folder)
+  - `UserProfiles/` — user-saved profiles (interactive save/load)
 
 ---
 
@@ -224,4 +224,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.1.2** — 10 files | 22 predefined profiles | bash/PS1 cross-platform
+Current: **v4.1.3** — 10 files | 22 predefined profiles | bash/PS1 cross-platform

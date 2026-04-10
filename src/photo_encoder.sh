@@ -1,28 +1,27 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# photo_encoder.sh v4.1 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.1.3 — Professional Batch Photo Encoder
 # ============================================================================
-# Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG → AVIF/WEBP/JPEG/HEIC/PNG
+# Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
 #           + DJI 4K Live Photo
 # HDR:      Auto detect, tone map HDR→SDR, preserve HDR, bit depth (8/10/16)
 # UHDR:     Ultra HDR / Super HDR / Adaptive HDR (gain map)
 # DJI:      Photo detection, metadata export, privacy strip, 4K Live Photo
-# New v3.0: Full audit, cross-platform sync, all bugfixes applied
 # Requires: ImageMagick
 # Optional: exiftool, jpegtran/mozjpeg, libultrahdr (ultrahdr_app)
 # ============================================================================
 
 set -euo pipefail
 
-VERSION="4.1"
+VERSION="4.1.3"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
 OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
 TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
 PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
-USER_PROFILES_DIR="/storage/emulated/0/Media/Profiles"
+USER_PROFILES_DIR="/storage/emulated/0/Media/UserProfiles"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
@@ -40,7 +39,7 @@ PRESERVE_STRUCTURE="true"; OVERWRITE="false"; RECURSIVE="true"
 EXTRACT_MOTION="false"; MOTION_ONLY="false"
 DRY_RUN="false"; VERBOSE="false"
 
-# ── v2.4 New Features ───────────────────────────────────────────────────────
+# ── Batch / Watch ───────────────────────────────────────────────────────────
 PARALLEL_JOBS=1               # 1 = sequential (default), 2-8 = parallel
 SKIP_EXISTING="false"         # skip if output file exists and >0 bytes (resume)
 PROFILE=""                    # named profile from photo_profiles.conf
@@ -360,8 +359,11 @@ load_profile_conf() {
                 SRGB)             [[ "$val" == "true" ]] && SRGB_CONVERT="true" ;;
                 NoAutoRotate)     [[ "$val" == "true" ]] && AUTO_ROTATE="false" ;;
                 WatermarkText)    [[ -n "$val" ]] && WATERMARK_TEXT="$val" ;;
+                WatermarkImage)   [[ -n "$val" ]] && WATERMARK_IMAGE="$val" ;;
                 WatermarkPos)     WATERMARK_POSITION="$val" ;;
                 WatermarkOpacity) WATERMARK_OPACITY="$val" ;;
+                NoRecursive)      [[ "$val" == "true" ]] && RECURSIVE="false" ;;
+                Flat)             [[ "$val" == "true" ]] && PRESERVE_STRUCTURE="false" ;;
                 Prefix)           [[ -n "$val" ]] && OUTPUT_PREFIX="$val" ;;
                 Suffix)           [[ -n "$val" ]] && OUTPUT_SUFFIX="$val" ;;
                 MinRes)           MIN_RESOLUTION="$val" ;;
@@ -377,7 +379,7 @@ load_profile_conf() {
     done < "$conf_file"
 }
 
-# Save current configuration to Profiles/*.conf (KEY=VALUE format)
+# Save current configuration to UserProfiles/*.conf (KEY=VALUE format)
 save_profile_conf() {
     mkdir -p "$USER_PROFILES_DIR"
 
@@ -408,8 +410,11 @@ StripExif=${STRIP_EXIF}
 SRGB=${SRGB_CONVERT}
 NoAutoRotate=$([[ "$AUTO_ROTATE" == "false" ]] && echo "true" || echo "false")
 WatermarkText=${WATERMARK_TEXT}
+WatermarkImage=${WATERMARK_IMAGE}
 WatermarkPos=${WATERMARK_POSITION}
 WatermarkOpacity=${WATERMARK_OPACITY}
+NoRecursive=$([[ "$RECURSIVE" == "false" ]] && echo "true" || echo "false")
+Flat=$([[ "$PRESERVE_STRUCTURE" == "false" ]] && echo "true" || echo "false")
 Prefix=${OUTPUT_PREFIX}
 Suffix=${OUTPUT_SUFFIX}
 MinRes=${MIN_RESOLUTION}
@@ -1520,7 +1525,7 @@ main() {
 
     parse_args "$@"
 
-    # ── Interactive Profiles/ load (option 3) ────────────────────────────────
+    # ── Interactive UserProfiles/ load (option 3) ───────────────────────────
     if [[ "$interactive_mode" == "true" ]]; then
         mkdir -p "$USER_PROFILES_DIR"
 
@@ -1531,7 +1536,7 @@ main() {
 
         if [[ ${#prof_files[@]} -gt 0 ]]; then
             echo ""
-            echo -e "  ${WHITE}Profile salvate in Profiles/:${NC}"
+            echo -e "  ${WHITE}Profile salvate in UserProfiles/:${NC}"
             echo -e "  ${CYAN}────────────────────────────────────${NC}"
             local idx=0
             for pf in "${prof_files[@]}"; do
@@ -1575,7 +1580,7 @@ main() {
                 fi
             fi
         else
-            echo -e "  ${GRAY}Niciun profil salvat. Profilele se salveaza in Profiles/.${NC}"
+            echo -e "  ${GRAY}Niciun profil salvat. Profilele se salveaza in UserProfiles/.${NC}"
         fi
 
     fi
