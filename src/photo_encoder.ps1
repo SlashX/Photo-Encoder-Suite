@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.1.3 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.2 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -17,7 +17,7 @@ param(
     [string]$OutputDir = "",
     [ValidateSet("avif","webp","jpeg","jpg","heic","png","jxl")][string]$Format = "avif",
     [ValidateRange(1,100)][int]$Quality = 80,
-    [ValidateSet("","web","social","archive","print")][string]$Preset = "",
+    [ValidateSet("","web","social","archive","print","max","thumb")][string]$Preset = "",
     [string]$MaxSize = "",
     [string]$Resize = "",
     [ValidateSet("fit","fill","exact")][string]$ResizeMode = "fit",
@@ -46,11 +46,12 @@ param(
     [switch]$Flat,
     [switch]$DryRun,
     [switch]$Verbose,
+    [switch]$Compare,
     [switch]$SkipExisting,
     [string]$Profile = ""
 )
 
-$Version = "4.1.3"
+$Version = "4.2"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -120,7 +121,7 @@ if ($InteractiveMode) {
                 if ($HdrMode -eq "force-sdr") { $ForceSdr = $true }
                 if ($HdrMode -eq "force-hdr") { $ForceHdr = $true }
                 foreach ($boolVar in @("StripExif","SRGB","NoAutoRotate","SkipDuplicates",
-                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose")) {
+                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose","Compare")) {
                     if ((Get-Variable -Name $boolVar -ValueOnly -ErrorAction SilentlyContinue) -eq "true") {
                         Set-Variable -Name $boolVar -Value $true -Scope Script
                     }
@@ -214,6 +215,7 @@ if ($Profile) {
                     "--overwrite"      { $Overwrite = $true }
                     "--no-recursive"   { $NoRecursive = $true }
                     "--flat"           { $Flat = $true }
+                    "--compare"        { $Compare = $true }
                 }
             }
             break
@@ -253,13 +255,15 @@ if ($UHDR -eq "decode" -and -not $HasUhdrApp) {
 $Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; MinResSkip=0; Lossless=0
             HdrDet=0; HdrTM=0; HdrPR=0; UhdrDet=0; UhdrStrip=0; UhdrExtract=0; UhdrDecode=0
             DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; SkipExist=0 }
+$FormatCounts = @{}
 $CompressionLog = [System.Collections.ArrayList]::new()
 $SeenHashes = @{}; $StartTime = Get-Date
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 function Get-PresetQ($p,$f) {
     @{ web=@{avif=40;webp=75;jpeg=82;heic=50;jxl=45;png=95}; social=@{avif=35;webp=70;jpeg=78;heic=45;jxl=40;png=95}
-       archive=@{avif=60;webp=90;jpeg=95;heic=70;jxl=65;png=95}; print=@{avif=65;webp=92;jpeg=97;heic=75;jxl=70;png=95} }[$p][$f]
+       archive=@{avif=60;webp=90;jpeg=95;heic=70;jxl=65;png=95}; print=@{avif=65;webp=92;jpeg=97;heic=75;jxl=70;png=95}
+       max=@{avif=80;webp=95;jpeg=98;heic=85;jxl=80;png=95}; thumb=@{avif=25;webp=50;jpeg=60;heic=30;jxl=25;png=95} }[$p][$f]
 }
 $EffQ = if ($Preset) { Get-PresetQ $Preset $Format } else { $Quality }
 
@@ -636,6 +640,10 @@ function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]
         $r=[math]::Round(($osz/$isz)*100);$c=if($r -le 100){"Green"}else{"Yellow"}
         Write-Host "[OK] $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out))  ($(Fmt-Size $isz) -> $(Fmt-Size $osz), ${r}%)" -ForegroundColor $c
         $script:CompressionLog.Add([PSCustomObject]@{Name=[IO.Path]::GetFileName($In);InSize=$isz;OutSize=$osz;Ratio=$r}) | Out-Null
+        if ($Compare) {
+            $sv=$isz-$osz; $sp=[math]::Round(($sv/$isz)*100,1)
+            Write-Host "  [COMPARE] $(Fmt-Size $isz) -> $(Fmt-Size $osz) (${r}%, saved $(Fmt-Size $sv) / ${sp}%)" -ForegroundColor Cyan
+        }
         return "ok"
     } catch { Write-Host "[FAIL] $([IO.Path]::GetFileName($In)): $_" -ForegroundColor Red; return "fail" }
 }
@@ -657,6 +665,28 @@ if ($HasExiftool) {
 }
 Write-Host ""
 
+# ── Auto-preset suggestion ─────────────────────────────────────────────────
+if (-not $Preset -and $Quality -eq 80 -and -not $Profile) {
+    $sampleFiles = $Files | Select-Object -First 10
+    $totalMp = 0; $sampleCnt = 0
+    foreach ($sf in $sampleFiles) {
+        try {
+            $dims = & magick identify -format "%w %h" "$($sf.FullName)[0]" 2>$null | Select-Object -First 1
+            if ($dims -match '^(\d+)\s+(\d+)$') {
+                $mp = [math]::Floor([int]$Matches[1] * [int]$Matches[2] / 1000000)
+                $totalMp += $mp; $sampleCnt++
+            }
+        } catch {}
+    }
+    if ($sampleCnt -gt 0) {
+        $avgMp = [math]::Floor($totalMp / $sampleCnt)
+        $suggested = if ($avgMp -ge 20) { "max" } elseif ($avgMp -ge 8) { "archive" } else { "web" }
+        Write-Host "  [SUGGEST] Detected ${avgMp}MP average ($sampleCnt samples)" -ForegroundColor Cyan
+        Write-Host "  [SUGGEST] Recommended preset: $suggested (use -Preset $suggested)" -ForegroundColor Cyan
+        Write-Host ""
+    }
+}
+
 # DJI batch export (before per-file loop)
 if ($DJI -eq "export") {
     Export-DJIMetadata $InputDir $OutputDir
@@ -671,6 +701,8 @@ foreach($F in $Files){
     $barW=40; $filled=[math]::Floor($Pct*$barW/100); $empty=$barW-$filled
     $bar = ("█" * $filled) + ("░" * $empty)
     Write-Host "[$bar] $Pct% ($Cnt/$Total) $($F.Name)" -ForegroundColor Blue
+    $fext = $F.Extension.TrimStart(".").ToUpper()
+    if ($FormatCounts.ContainsKey($fext)) { $FormatCounts[$fext]++ } else { $FormatCounts[$fext] = 1 }
 
     # Skip duplicates
     if($SkipDuplicates){$h=(Get-FileHash $F.FullName -Algorithm SHA256).Hash;if($SeenHashes.ContainsKey($h)){$Stats.Dupes++;$Skip++;continue};$SeenHashes[$h]=$F.Name}
@@ -823,6 +855,7 @@ if ($InteractiveMode -and -not $DryRun) {
                 "SkipExisting=$($SkipExisting.ToString().ToLower())"
                 "Overwrite=$($Overwrite.ToString().ToLower())"
                 "Verbose=$($Verbose.ToString().ToLower())"
+                "Compare=$($Compare.ToString().ToLower())"
             ) | Out-File $saveFile -Encoding utf8
             Write-Host "  Saved: $saveFile" -ForegroundColor Green
         }
@@ -860,6 +893,10 @@ Write-Host "──────────────────────�
 if(-not $DryRun -and -not $MotionOnly -and $Stats.TotalIn -gt 0){
     $saved=$Stats.TotalIn-$Stats.TotalOut
     Write-Host "  Size: $(Fmt-Size $Stats.TotalIn) -> $(Fmt-Size $Stats.TotalOut) $(if($saved -gt 0){"(saved $(Fmt-Size $saved))"})"
+    if ($Conv -gt 0) {
+        $avgRatio = [math]::Round(($Stats.TotalOut/$Stats.TotalIn)*100,1)
+        Write-Host "  Avg compression: ${avgRatio}%"
+    }
     # Compression Report
     if ($CompressionLog.Count -gt 0) {
         Write-Host "────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
@@ -878,5 +915,11 @@ if(-not $DryRun -and -not $MotionOnly -and $Stats.TotalIn -gt 0){
         }
     }
 }
-Write-Host "  Time: $(Fmt-Dur $Dur) | HDR: $HdrMode | UHDR: $(if($UHDR){$UHDR}else{'auto'})"
+Write-Host "  Time: $(Fmt-Dur $Dur)" -NoNewline
+if ($Conv -gt 0) { $avgDur = [TimeSpan]::FromSeconds($Dur.TotalSeconds / $Conv); Write-Host " | Avg: $(Fmt-Dur $avgDur)/image" -NoNewline }
+Write-Host " | HDR: $HdrMode | UHDR: $(if($UHDR){$UHDR}else{'auto'})"
+if ($FormatCounts.Count -gt 0) {
+    $fmtStr = ($FormatCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Value)" }) -join ", "
+    Write-Host "  Input formats: $fmtStr" -ForegroundColor Gray
+}
 Write-Host "================================================================`n" -ForegroundColor Cyan

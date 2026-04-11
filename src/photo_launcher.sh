@@ -93,15 +93,19 @@ select_preset() {
     echo -e "    ${GREEN}2)${NC} social   — social media (Instagram, WhatsApp)"
     echo -e "    ${GREEN}3)${NC} archive  — arhivare calitate inalta"
     echo -e "    ${GREEN}4)${NC} print    — print maxim calitate"
-    echo -e "    ${GREEN}5)${NC} custom   — alege quality manual (1-100)"
+    echo -e "    ${GREEN}5)${NC} max      — calitate maxima, fara pierdere vizibila"
+    echo -e "    ${GREEN}6)${NC} thumb    — thumbnails / preview-uri rapide"
+    echo -e "    ${GREEN}7)${NC} custom   — alege quality manual (1-100)"
     echo ""
-    read -p "  Alege preset [1-5, default=1 web]: " preset_choice
+    read -p "  Alege preset [1-7, default=1 web]: " preset_choice
     case "${preset_choice:-1}" in
         1) PRESET="web"; QUALITY_FLAG="-p web" ;;
         2) PRESET="social"; QUALITY_FLAG="-p social" ;;
         3) PRESET="archive"; QUALITY_FLAG="-p archive" ;;
         4) PRESET="print"; QUALITY_FLAG="-p print" ;;
-        5)
+        5) PRESET="max"; QUALITY_FLAG="-p max" ;;
+        6) PRESET="thumb"; QUALITY_FLAG="-p thumb" ;;
+        7)
             read -p "  Quality (1-100) [80]: " custom_q
             PRESET="custom"
             QUALITY_FLAG="-q ${custom_q:-80}"

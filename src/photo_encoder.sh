@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# photo_encoder.sh v4.1.3 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.2 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.1.3"
+VERSION="4.2"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
@@ -37,7 +37,7 @@ OUTPUT_PREFIX=""; OUTPUT_SUFFIX=""; MIN_RESOLUTION=0
 LOSSLESS_JPEG="false"; SKIP_DUPLICATES="false"
 PRESERVE_STRUCTURE="true"; OVERWRITE="false"; RECURSIVE="true"
 EXTRACT_MOTION="false"; MOTION_ONLY="false"
-DRY_RUN="false"; VERBOSE="false"
+DRY_RUN="false"; VERBOSE="false"; COMPARE="false"
 
 # ── Batch / Watch ───────────────────────────────────────────────────────────
 PARALLEL_JOBS=1               # 1 = sequential (default), 2-8 = parallel
@@ -68,6 +68,7 @@ UHDR_EXTENSIONS="jpg jpeg"    # Ultra HDR only exists in JPEG containers
 # ── Tracking ─────────────────────────────────────────────────────────────────
 declare -A LIVE_PHOTO_PAIRED=() SEEN_HASHES=()
 STATS_TOTAL_IN_SIZE=0; STATS_TOTAL_OUT_SIZE=0; STATS_START_TIME=0
+declare -A FORMAT_COUNTS=()
 STATS_DUPLICATES_SKIPPED=0; STATS_MINRES_SKIPPED=0; STATS_LOSSLESS_OPTIMIZED=0
 STATS_HDR_DETECTED=0; STATS_HDR_TONEMAPPED=0; STATS_HDR_PRESERVED=0
 STATS_UHDR_DETECTED=0; STATS_UHDR_STRIPPED=0; STATS_UHDR_EXTRACTED=0; STATS_UHDR_DECODED=0
@@ -87,6 +88,8 @@ get_preset_quality() {
         social)  case "$f" in avif) echo 35;; webp) echo 70;; jpeg) echo 78;; heic) echo 45;; jxl) echo 40;; png) echo 95;; esac ;;
         archive) case "$f" in avif) echo 60;; webp) echo 90;; jpeg) echo 95;; heic) echo 70;; jxl) echo 65;; png) echo 95;; esac ;;
         print)   case "$f" in avif) echo 65;; webp) echo 92;; jpeg) echo 97;; heic) echo 75;; jxl) echo 70;; png) echo 95;; esac ;;
+        max)     case "$f" in avif) echo 80;; webp) echo 95;; jpeg) echo 98;; heic) echo 85;; jxl) echo 80;; png) echo 95;; esac ;;
+        thumb)   case "$f" in avif) echo 25;; webp) echo 50;; jpeg) echo 60;; heic) echo 30;; jxl) echo 25;; png) echo 95;; esac ;;
     esac
 }
 
@@ -321,6 +324,7 @@ parse_profile_args() {
             --overwrite)          OVERWRITE="true"; shift ;;
             --no-recursive)       RECURSIVE="false"; shift ;;
             --flat)               PRESERVE_STRUCTURE="false"; shift ;;
+            --compare)            COMPARE="true"; shift ;;
             *)                    shift ;;  # skip unknown profile args
         esac
     done
@@ -374,6 +378,7 @@ load_profile_conf() {
                 SkipExisting)     [[ "$val" == "true" ]] && SKIP_EXISTING="true" ;;
                 Overwrite)        [[ "$val" == "true" ]] && OVERWRITE="true" ;;
                 Verbose)          [[ "$val" == "true" ]] && VERBOSE="true" ;;
+                Compare)          [[ "$val" == "true" ]] && COMPARE="true" ;;
             esac
         fi
     done < "$conf_file"
@@ -425,6 +430,7 @@ MotionOnly=${MOTION_ONLY}
 SkipExisting=${SKIP_EXISTING}
 Overwrite=${OVERWRITE}
 Verbose=${VERBOSE}
+Compare=${COMPARE}
 EOF
             log_info "Profil salvat: ${prof_file}"
         fi
@@ -1288,6 +1294,10 @@ convert_image() {
         local ratio; ratio=$(awk "BEGIN{printf\"%.0f\",($osz/$isz)*100}"); local c="${GREEN}"; [[ $ratio -gt 100 ]] && c="${YELLOW}"
         echo -e "${c}[OK]${NC} $(basename "$input") → $(basename "$output") ${GRAY}($(format_size $isz) → $(format_size $osz), ${ratio}%)${NC}"
         log_compression "$(basename "$input")" "$isz" "$osz"
+        if [[ "$COMPARE" == "true" ]]; then
+            local saved=$((isz - osz)); local sp; sp=$(awk "BEGIN{printf\"%.1f\",($saved/$isz)*100}")
+            echo -e "  ${CYAN}[COMPARE]${NC} $(format_size $isz) → $(format_size $osz) ${GRAY}(${ratio}%, saved $(format_size $saved) / ${sp}%)${NC}"
+        fi
         return 0
     else
         log_error "Failed: $(basename "$input")"; return 1
@@ -1344,6 +1354,10 @@ process_files() {
         local od="$output_dir"; [[ "$PRESERVE_STRUCTURE" == "true" && "$rd" != "." ]] && od="${output_dir}/${rd}"; mkdir -p "$od"
 
         show_progress "$count" "$total" "$bn"
+
+        # Track input format distribution
+        local ext="${bn##*.}"; ext="${ext,,}"
+        FORMAT_COUNTS["$ext"]=$(( ${FORMAT_COUNTS["$ext"]:-0} + 1 ))
 
         # Skip duplicates
         if [[ "$SKIP_DUPLICATES" == "true" ]]; then
@@ -1426,10 +1440,23 @@ process_files() {
         echo -e "  Total input:              ${WHITE}$(format_size $STATS_TOTAL_IN_SIZE)${NC}"
         echo -e "  Total output:             ${WHITE}$(format_size $STATS_TOTAL_OUT_SIZE)${NC}"
         [[ $saved -gt 0 ]] && { local sp; sp=$(awk "BEGIN{printf\"%.1f\",($saved/$STATS_TOTAL_IN_SIZE)*100}"); echo -e "  Space saved:              ${GREEN}$(format_size $saved) (${sp}%)${NC}"; }
+        if [[ $converted -gt 0 ]]; then
+            local avg_ratio; avg_ratio=$(awk "BEGIN{printf\"%.1f\",(${STATS_TOTAL_OUT_SIZE}/${STATS_TOTAL_IN_SIZE})*100}")
+            echo -e "  Avg compression:          ${WHITE}${avg_ratio}%${NC}"
+        fi
         print_compression_report
     fi
     echo -e "  Processing time:          ${WHITE}$(format_duration $dur)${NC}"
     [[ $converted -gt 0 && $dur -gt 0 ]] && echo -e "  Average per image:        ${WHITE}$(format_duration $((dur/converted)))${NC}"
+    # Input format distribution
+    if [[ ${#FORMAT_COUNTS[@]} -gt 0 ]]; then
+        local fmt_str=""
+        for ext in $(echo "${!FORMAT_COUNTS[@]}" | tr ' ' '\n' | sort); do
+            [[ -n "$fmt_str" ]] && fmt_str+=", "
+            fmt_str+="${ext^^}:${FORMAT_COUNTS[$ext]}"
+        done
+        echo -e "  Input formats:            ${GRAY}${fmt_str}${NC}"
+    fi
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
     echo -e "  Format: ${WHITE}${OUTPUT_FORMAT^^}${NC} | HDR: ${WHITE}${HDR_MODE}${NC}$(if [[ -n "$UHDR_ACTION" ]]; then echo " | UHDR: ${WHITE}${UHDR_ACTION}${NC}"; fi)"
     echo -e "  Output: ${WHITE}${output_dir}${NC}"
@@ -1482,6 +1509,7 @@ parse_args() {
             --overwrite)          OVERWRITE="true"; shift ;;
             --dry-run)            DRY_RUN="true"; shift ;;
             -v|--verbose)         VERBOSE="true"; shift ;;
+            --compare)            COMPARE="true"; shift ;;
             -h|--help)            usage ;;
             --version)            echo "photo_encoder.sh v${VERSION}"; exit 0 ;;
             *)                    log_error "Unknown: $1"; exit 1 ;;
@@ -1495,7 +1523,7 @@ validate_args() {
     [[ -z "$OUTPUT_DIR" ]] && { log_error "Output required (-o)"; exit 1; }
     case "$OUTPUT_FORMAT" in avif|webp|jpeg|jpg|heic|png|jxl) ;; *) log_error "Bad format"; exit 1;; esac
     [[ "$OUTPUT_FORMAT" == "jpg" ]] && OUTPUT_FORMAT="jpeg"
-    [[ -n "$QUALITY_PRESET" ]] && case "$QUALITY_PRESET" in web|social|archive|print) ;; *) log_error "Bad preset"; exit 1;; esac
+    [[ -n "$QUALITY_PRESET" ]] && case "$QUALITY_PRESET" in web|social|archive|print|max|thumb) ;; *) log_error "Bad preset"; exit 1;; esac
     [[ -n "$BIT_DEPTH" ]] && case "$BIT_DEPTH" in 8|10|16) ;; *) log_error "Depth: 8/10/16"; exit 1;; esac
     [[ -n "$UHDR_ACTION" ]] && case "$UHDR_ACTION" in detect|strip|extract|decode|info) ;; *) log_error "UHDR: detect/strip/extract/decode/info"; exit 1;; esac
     [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip) ;; *) log_error "DJI: detect/export/privacy-strip"; exit 1;; esac
@@ -1617,6 +1645,30 @@ main() {
     [[ "$EXTRACT_MOTION" == "true" ]] && echo -e "  Motion:     ${WHITE}Samsung + Google + iPhone + DJI${NC}"
     [[ "$DRY_RUN" == "true" ]] && echo -e "  ${YELLOW}DRY RUN${NC}"
     echo ""
+
+    # ── Auto-preset suggestion ─────────────────────────────────────────────
+    if [[ -z "$QUALITY_PRESET" && "$QUALITY" == "80" && -z "$PROFILE" ]]; then
+        local sample_mp=0 sample_count=0
+        while IFS= read -r -d '' sf; do
+            is_supported_image "$sf" || continue
+            local dims; dims=$($MAGICK_CMD identify -format "%w %h" "$sf[0]" 2>/dev/null | head -1)
+            if [[ "$dims" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+                local mp=$(( ${BASH_REMATCH[1]} * ${BASH_REMATCH[2]} / 1000000 ))
+                sample_mp=$((sample_mp + mp)); sample_count=$((sample_count + 1))
+            fi
+            [[ $sample_count -ge 10 ]] && break
+        done < <(find "$INPUT_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
+        if [[ $sample_count -gt 0 ]]; then
+            local avg_mp=$((sample_mp / sample_count))
+            local suggested=""
+            if [[ $avg_mp -ge 20 ]]; then suggested="max"
+            elif [[ $avg_mp -ge 8 ]]; then suggested="archive"
+            else suggested="web"; fi
+            echo -e "  ${CYAN}[SUGGEST]${NC} Detected ${WHITE}${avg_mp}MP${NC} average (${sample_count} samples)"
+            echo -e "  ${CYAN}[SUGGEST]${NC} Recommended preset: ${WHITE}${suggested}${NC} (use ${WHITE}-p ${suggested}${NC})"
+            echo ""
+        fi
+    fi
 
     # Watch mode — infinite loop monitoring
     if [[ "$WATCH_MODE" == "true" ]]; then

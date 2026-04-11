@@ -3,6 +3,25 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.2 — Quality presets max/thumb + compare + auto-suggest + extended stats
+───────────────────────────────────────────────────────────────
+  ADD quality preset "max" — calitate maxima fara pierdere vizibila
+    (avif=80, webp=95, jpeg=98, heic=85, jxl=80, png=95)
+  ADD quality preset "thumb" — thumbnails / preview-uri rapide
+    (avif=25, webp=50, jpeg=60, heic=30, jxl=25, png=95)
+  ADD --compare flag — afiseaza comparatie per fisier dupa conversie
+    (original → output, ratio, saved bytes/%)
+  ADD auto-preset suggestion — detecteaza rezolutia input, sugereaza preset
+    (>20MP → max, >8MP → archive, altfel → web, doar sugestie, fara forta)
+  ADD extended batch summary — average compression ratio, avg time/image,
+    input format distribution (JPEG:15, HEIC:8, etc.)
+  ADD profile predefinite: max-avif, max-jpeg (24 profile total)
+  ADD launcher preset menu: max + thumb adaugate (7 optiuni in loc de 5)
+  SYNC SH+PS1 profile save/load: 33 campuri (adaugat Compare)
+  SYNC SH+PS1 token parser: 37 flags (adaugat --compare)
+  SYNC SH+PS1 bool conversion list: 13 intrari (adaugat Compare)
+
+
   v4.1.3 — Audit complet + sync profile save/load + bugfix-uri
 ───────────────────────────────────────────────────────────────
   FIX README.md — tabel meniu launcher avea numerotare si optiuni gresite
