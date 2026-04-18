@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.2 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.3 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -27,6 +27,7 @@ param(
     [switch]$ForceHdr,
     [ValidateSet("","detect","info","strip","extract","decode")][string]$UHDR = "",
     [ValidateSet("","detect","export","privacy-strip")][string]$DJI = "",
+    [switch]$DngPreview,
     [switch]$StripExif,
     [switch]$NoAutoRotate,
     [switch]$SRGB,
@@ -48,10 +49,12 @@ param(
     [switch]$Verbose,
     [switch]$Compare,
     [switch]$SkipExisting,
+    [switch]$Watch,
+    [int]$WatchInterval = 5,
     [string]$Profile = ""
 )
 
-$Version = "4.2"
+$Version = "4.3"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -121,7 +124,7 @@ if ($InteractiveMode) {
                 if ($HdrMode -eq "force-sdr") { $ForceSdr = $true }
                 if ($HdrMode -eq "force-hdr") { $ForceHdr = $true }
                 foreach ($boolVar in @("StripExif","SRGB","NoAutoRotate","SkipDuplicates",
-                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose","Compare")) {
+                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose","Compare","DngPreview")) {
                     if ((Get-Variable -Name $boolVar -ValueOnly -ErrorAction SilentlyContinue) -eq "true") {
                         Set-Variable -Name $boolVar -Value $true -Scope Script
                     }
@@ -204,6 +207,7 @@ if ($Profile) {
                     "--motion-only"    { $MotionOnly = $true; $ExtractMotion = $true }
                     "--dji"            { $DJI = $tokens[++$i] }
                     "--uhdr"           { $UHDR = $tokens[++$i] }
+                    "--dng-preview"    { $DngPreview = $true }
                     "--watermark-text" { $WatermarkText = $tokens[++$i] }
                     "--watermark-image" { $WatermarkImage = $tokens[++$i] }
                     "--watermark-pos"  { $WatermarkPos = $tokens[++$i] }
@@ -212,6 +216,8 @@ if ($Profile) {
                     "--suffix"         { $Suffix = $tokens[++$i] }
                     "--min-res"        { $MinRes = [int]$tokens[++$i] }
                     "--skip-existing"  { $SkipExisting = $true }
+                    "--watch"          { $Watch = $true }
+                    "--watch-interval" { $WatchInterval = [int]$tokens[++$i] }
                     "--overwrite"      { $Overwrite = $true }
                     "--no-recursive"   { $NoRecursive = $true }
                     "--flat"           { $Flat = $true }
@@ -254,10 +260,12 @@ if ($UHDR -eq "decode" -and -not $HasUhdrApp) {
 
 $Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; MinResSkip=0; Lossless=0
             HdrDet=0; HdrTM=0; HdrPR=0; UhdrDet=0; UhdrStrip=0; UhdrExtract=0; UhdrDecode=0
-            DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; SkipExist=0 }
+            DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; SkipExist=0
+            DngDet=0; DngJxl=0; DngFailed=0; DngPreview=0 }
 $FormatCounts = @{}
 $CompressionLog = [System.Collections.ArrayList]::new()
 $SeenHashes = @{}; $StartTime = Get-Date
+$script:DjiCache = @{}; $script:UhdrCache = @{}
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 function Get-PresetQ($p,$f) {
@@ -308,25 +316,28 @@ if ($Format -eq "jxl") {
 Write-Host "  Format: $($Format.ToUpper()) | $(if($Preset){"Preset: $Preset (q$EffQ)"}else{"Quality: $Quality"}) | HDR: $HdrMode" -ForegroundColor White
 if ($UHDR) { Write-Host "  Ultra HDR: $UHDR" -ForegroundColor Blue } else { Write-Host "  Ultra HDR: auto-detect" -ForegroundColor White }
 Write-Host "  libultrahdr: $(if($HasUhdrApp){'available'}else{'not installed'}) | exiftool: $(if($HasExiftool){'available'}else{'not installed'})" -ForegroundColor Gray
-Write-Host "  Input: $InputDir -> Output: $OutputDir`n" -ForegroundColor White
+Write-Host "  Input: $InputDir -> Output: $OutputDir" -ForegroundColor White
+if ($Watch) { Write-Host "  Watch: every ${WatchInterval}s" -ForegroundColor White }
+Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ULTRA HDR FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Detect-UHDR([string]$Path) {
-    if (-not $HasExiftool) { return "unknown" }
+    if ($script:UhdrCache.ContainsKey($Path)) { return $script:UhdrCache[$Path] }
+    if (-not $HasExiftool) { $script:UhdrCache[$Path] = "unknown"; return "unknown" }
     $hdrgm = & exiftool -s3 "-XMP-hdrgm:Version" "$Path" 2>$null
-    if ($hdrgm) { return "uhdr" }
+    if ($hdrgm) { $script:UhdrCache[$Path] = "uhdr"; return "uhdr" }
     $iso = & exiftool -s3 "-XMP-GainMap:Version" "$Path" 2>$null
-    if ($iso) { return "iso21496" }
+    if ($iso) { $script:UhdrCache[$Path] = "iso21496"; return "iso21496" }
     $mpfc = & exiftool -s3 -MPImageCount "$Path" 2>$null
     if ($mpfc -and [int]$mpfc -gt 1) {
         $hh = & exiftool -s3 -HDRHeadroom "$Path" 2>$null
-        if ($hh) { return "adaptive" }
-        return "mpf_possible"
+        if ($hh) { $script:UhdrCache[$Path] = "adaptive"; return "adaptive" }
+        $script:UhdrCache[$Path] = "mpf_possible"; return "mpf_possible"
     }
-    return "none"
+    $script:UhdrCache[$Path] = "none"; return "none"
 }
 
 function Get-UHDRInfo([string]$Path) {
@@ -433,14 +444,15 @@ function Decode-UHDRFull([string]$In, [string]$Out) {
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Detect-DJIPhoto([string]$Path) {
-    if (-not $HasExiftool) { return $false }
+    if ($script:DjiCache.ContainsKey($Path)) { return $script:DjiCache[$Path] }
+    if (-not $HasExiftool) { $script:DjiCache[$Path] = $false; return $false }
     $make = & exiftool -s3 -Make "$Path" 2>$null
-    if ($make -and $make.ToLower() -match "dji") { return $true }
+    if ($make -and $make.ToLower() -match "dji") { $script:DjiCache[$Path] = $true; return $true }
     $model = & exiftool -s3 -Model "$Path" 2>$null
-    if ($model -and $model.ToLower() -match "dji|osmo|action|mavic|phantom|mini") { return $true }
+    if ($model -and $model.ToLower() -match "dji|osmo|action|mavic|phantom|mini") { $script:DjiCache[$Path] = $true; return $true }
     $xmp = & exiftool -s3 "-XMP-drone-dji:SpeedX" "$Path" 2>$null
-    if ($xmp) { return $true }
-    return $false
+    if ($xmp) { $script:DjiCache[$Path] = $true; return $true }
+    $script:DjiCache[$Path] = $false; return $false
 }
 
 function Get-DJIInfo([string]$Path) {
@@ -543,6 +555,48 @@ function Get-TgtDepth([string]$Act,[string]$Fmt) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DNG VERSION DETECTION (DNG 1.0 -> 1.7.1.0, JPEG XL compression)
+# ══════════════════════════════════════════════════════════════════════════════
+
+function Detect-DNGVersion([string]$P) {
+    if (-not $HasExiftool) { return "" }
+    try { return (& exiftool -s3 -DNGVersion "$P" 2>$null | Select-Object -First 1) } catch { return "" }
+}
+function Detect-DNGBackward([string]$P) {
+    if (-not $HasExiftool) { return "" }
+    try { return (& exiftool -s3 -DNGBackwardVersion "$P" 2>$null | Select-Object -First 1) } catch { return "" }
+}
+function Detect-DNGCompression([string]$P) {
+    if (-not $HasExiftool) { return "" }
+    try { return (& exiftool -s3 -Compression "$P" 2>$null | Select-Object -First 1) } catch { return "" }
+}
+function Classify-DNG([string]$Ver,[string]$Comp) {
+    if ($Comp -match "JPEG\s*XL|JXL") { return "jxl" }
+    if ($Ver -match "^(\d+)\.(\d+)") {
+        $minor = [int]$Matches[2]
+        if ($minor -ge 7) { return "jxl" }
+        return "legacy"
+    }
+    return "unknown"
+}
+
+# Extract embedded preview JPEG from DNG. Tries JpgFromRaw, PreviewImage, OtherImage.
+# Returns tag name on success, $null on failure. Writes preview to $OutPath.
+# Uses cmd /c for binary-safe stdout redirect (PS native > corrupts binary).
+function Extract-DNGPreview([string]$InPath, [string]$OutPath) {
+    if (-not $HasExiftool) { return $null }
+    foreach ($tag in @("JpgFromRaw", "PreviewImage", "OtherImage")) {
+        if (Test-Path $OutPath) { Remove-Item $OutPath -Force -ErrorAction SilentlyContinue }
+        & cmd /c "exiftool -b -$tag `"$InPath`" > `"$OutPath`" 2>nul" | Out-Null
+        if ((Test-Path $OutPath) -and ((Get-Item $OutPath).Length -gt 100)) {
+            return $tag
+        }
+    }
+    if (Test-Path $OutPath) { Remove-Item $OutPath -Force -ErrorAction SilentlyContinue }
+    return $null
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MOTION / LIVE PHOTO
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -575,9 +629,10 @@ function Do-ExtractEmbedded([string]$Fp,[string]$Od) {
 # CONVERT
 # ══════════════════════════════════════════════════════════════════════════════
 
-function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]$TgtD) {
+function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]$TgtD,[string]$OrigIn="") {
+    if (-not $OrigIn) { $OrigIn = $In }
     if((Test-Path $Out)-and -not $Overwrite){return "skipped"}
-    if($DryRun){Write-Host "[DRY] $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out)) (q$Q)" -ForegroundColor Cyan;return "dry"}
+    if($DryRun){Write-Host "[DRY] $([IO.Path]::GetFileName($OrigIn)) -> $([IO.Path]::GetFileName($Out)) (q$Q)" -ForegroundColor Cyan;return "dry"}
 
     # ── Lossless JPEG optimization ────────────────────────────────────
     if ($LosslessJpeg -and $Format -eq "jpeg") {
@@ -592,11 +647,11 @@ function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]
                 & magick "$In" -strip "$Out" 2>&1 | Out-Null
             }
             if (Test-Path $Out) {
-                $isz = (Get-Item $In).Length; $osz = (Get-Item $Out).Length
+                $isz = (Get-Item $OrigIn).Length; $osz = (Get-Item $Out).Length
                 $Stats.TotalIn += $isz; $Stats.TotalOut += $osz; $Stats.Lossless++
                 $r = [math]::Round(($osz/$isz)*100)
-                Write-Host "[LOSSLESS] $([IO.Path]::GetFileName($In))  ($(Fmt-Size $isz) -> $(Fmt-Size $osz), ${r}%)" -ForegroundColor Green
-                $script:CompressionLog.Add([PSCustomObject]@{Name=[IO.Path]::GetFileName($In);InSize=$isz;OutSize=$osz;Ratio=$r}) | Out-Null
+                Write-Host "[LOSSLESS] $([IO.Path]::GetFileName($OrigIn))  ($(Fmt-Size $isz) -> $(Fmt-Size $osz), ${r}%)" -ForegroundColor Green
+                $script:CompressionLog.Add([PSCustomObject]@{Name=[IO.Path]::GetFileName($OrigIn);InSize=$isz;OutSize=$osz;Ratio=$r}) | Out-Null
                 return "ok"
             }
         }
@@ -636,16 +691,16 @@ function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]
         if(-not $StripExif -and $HasExiftool){
             & exiftool -TagsFromFile $In -overwrite_original $Out 2>&1|Out-Null
             if($HdrAct -eq "preserve"){& exiftool -TagsFromFile $In -MaxContentLightLevel -MaxFrameAverageLightLevel -ColorPrimaries -TransferCharacteristics -overwrite_original $Out 2>&1|Out-Null}}
-        $isz=(Get-Item $In).Length;$osz=(Get-Item $Out).Length;$Stats.TotalIn+=$isz;$Stats.TotalOut+=$osz
+        $isz=(Get-Item $OrigIn).Length;$osz=(Get-Item $Out).Length;$Stats.TotalIn+=$isz;$Stats.TotalOut+=$osz
         $r=[math]::Round(($osz/$isz)*100);$c=if($r -le 100){"Green"}else{"Yellow"}
-        Write-Host "[OK] $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out))  ($(Fmt-Size $isz) -> $(Fmt-Size $osz), ${r}%)" -ForegroundColor $c
-        $script:CompressionLog.Add([PSCustomObject]@{Name=[IO.Path]::GetFileName($In);InSize=$isz;OutSize=$osz;Ratio=$r}) | Out-Null
+        Write-Host "[OK] $([IO.Path]::GetFileName($OrigIn)) -> $([IO.Path]::GetFileName($Out))  ($(Fmt-Size $isz) -> $(Fmt-Size $osz), ${r}%)" -ForegroundColor $c
+        $script:CompressionLog.Add([PSCustomObject]@{Name=[IO.Path]::GetFileName($OrigIn);InSize=$isz;OutSize=$osz;Ratio=$r}) | Out-Null
         if ($Compare) {
             $sv=$isz-$osz; $sp=[math]::Round(($sv/$isz)*100,1)
             Write-Host "  [COMPARE] $(Fmt-Size $isz) -> $(Fmt-Size $osz) (${r}%, saved $(Fmt-Size $sv) / ${sp}%)" -ForegroundColor Cyan
         }
         return "ok"
-    } catch { Write-Host "[FAIL] $([IO.Path]::GetFileName($In)): $_" -ForegroundColor Red; return "fail" }
+    } catch { Write-Host "[FAIL] $([IO.Path]::GetFileName($OrigIn)): $_" -ForegroundColor Red; return "fail" }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -655,13 +710,29 @@ function Convert-Photo([string]$In,[string]$Out,[int]$Q,[string]$HdrAct,[string]
 $Files=@(); foreach($P in $SupportedExtensions){$Files+=Get-ChildItem -Path $InputDir -Filter $P -Recurse:(-not $NoRecursive) -File -ErrorAction SilentlyContinue}
 $Files=$Files|Sort-Object FullName; $Total=$Files.Count
 $Conv=0;$MoEx=0;$LiEx=0;$Skip=0;$Fail=0
-if($Total -eq 0){Write-Host "[WARN] No images" -ForegroundColor Yellow;exit 0}
+if($Total -eq 0 -and -not $Watch){Write-Host "[WARN] No images" -ForegroundColor Yellow;exit 0}
 Write-Host "[INFO] Found $Total image(s)" -ForegroundColor Green
 
 # Pre-scan UHDR
 if ($HasExiftool) {
     $uc=0; foreach($F in $Files){ if($UhdrExts -contains $F.Extension.ToLower()){ $ut=Detect-UHDR $F.FullName; if($ut -notin "none","unknown"){$uc++} } }
     if($uc -gt 0){Write-Host "[INFO] Detected $uc Ultra HDR image(s)" -ForegroundColor Blue}
+}
+
+# Pre-scan DNG
+if ($HasExiftool) {
+    $nc=0; $njxl=0
+    foreach($F in $Files){
+        if($F.Extension.ToLower() -eq ".dng"){
+            $nc++
+            $nv=Detect-DNGVersion $F.FullName; $nco=Detect-DNGCompression $F.FullName
+            if((Classify-DNG $nv $nco) -eq "jxl"){$njxl++}
+        }
+    }
+    if($nc -gt 0){
+        if($njxl -gt 0){Write-Host "[INFO] Detected $nc DNG file(s) - $njxl with DNG 1.7+ (JPEG XL)" -ForegroundColor Magenta}
+        else{Write-Host "[INFO] Detected $nc DNG file(s)" -ForegroundColor Magenta}
+    }
 }
 Write-Host ""
 
@@ -695,7 +766,18 @@ if ($DJI -eq "export") {
 
 $MaxB=if($MaxSize){Parse-SizeB $MaxSize}else{0}; $Cnt=0
 
+# ── Watch mode setup (skip initial batch) ───────────────────────────
+$WatchSeen = @{}
+if ($Watch) {
+    foreach ($wf in $Files) { $WatchSeen[$wf.FullName] = $true }
+    $initialCount = $WatchSeen.Count
+    $Files = @(); $Total = 0
+    Write-Host "[INFO] Watch mode started. Monitoring: $InputDir" -ForegroundColor Green
+    Write-Host "[INFO] Interval: ${WatchInterval}s. Press Ctrl+C to stop." -ForegroundColor Green
+    Write-Host "[INFO] Skipped $initialCount existing file(s). Waiting for new files..." -ForegroundColor Green
+}
 
+do {
 foreach($F in $Files){
     $Cnt++; $Pct=[math]::Round($Cnt/$Total*100)
     $barW=40; $filled=[math]::Floor($Pct*$barW/100); $empty=$barW-$filled
@@ -772,8 +854,58 @@ foreach($F in $Files){
         }
     }
 
+    # ── DNG version detection (supports DNG 1.0 -> 1.7.1.0) ──────────
+    $srcPath = $F.FullName
+    $dngPreviewTmp = $null
+    if ($F.Extension.ToLower() -eq ".dng") {
+        $Stats.DngDet++
+        $dngVer = Detect-DNGVersion $F.FullName
+        $dngBwd = Detect-DNGBackward $F.FullName
+        $dngComp = Detect-DNGCompression $F.FullName
+        $dngClass = Classify-DNG $dngVer $dngComp
+        if ($dngVer -and $Verbose) { Write-Host "[DNG] $($F.Name): v$dngVer (backward: $dngBwd) | Compression: $dngComp" -ForegroundColor Gray }
+
+        $tryPreview = $false; $dngReason = ""
+        if ($DngPreview) {
+            $tryPreview = $true; $dngReason = "fast-mode"
+        } elseif ($dngClass -eq "jxl") {
+            $Stats.DngJxl++
+            $verLabel = if ($dngVer) { $dngVer } else { "1.7+" }
+            $compLabel = if ($dngComp) { $dngComp } else { "JPEG XL" }
+            Write-Host "[DNG] $($F.Name): DNG $verLabel ($compLabel)" -ForegroundColor Magenta
+            $canDecode = $true
+            try { $null = & magick identify -format "%w" "$($F.FullName)" 2>$null; if ($LASTEXITCODE -ne 0) { $canDecode = $false } } catch { $canDecode = $false }
+            if (-not $canDecode) { $tryPreview = $true; $dngReason = "auto-fallback" }
+        }
+
+        if ($tryPreview) {
+            $dngPreviewTmp = Join-Path $env:TEMP "dng_preview_$PID`_$([Guid]::NewGuid().ToString('N').Substring(0,8)).jpg"
+            $previewTag = Extract-DNGPreview $F.FullName $dngPreviewTmp
+            if ($previewTag) {
+                $Stats.DngPreview++
+                Write-Host "[DNG] Preview extras ($previewTag, $dngReason): $($F.Name)" -ForegroundColor Magenta
+                $srcPath = $dngPreviewTmp
+            } else {
+                if (Test-Path $dngPreviewTmp) { Remove-Item $dngPreviewTmp -Force -ErrorAction SilentlyContinue }
+                $dngPreviewTmp = $null
+                if ($dngReason -eq "auto-fallback") {
+                    $verLabel = if ($dngVer) { $dngVer } else { "1.7+" }
+                    $Stats.DngFailed++; $Fail++
+                    Write-Host "[DNG] ImageMagick nu poate decoda DNG $verLabel si nu exista preview embedded" -ForegroundColor Red
+                    Write-Host "[DNG] Solutii:" -ForegroundColor Yellow
+                    Write-Host "[DNG]   1) Actualizeaza ImageMagick + LibRaw 0.21+ (suport JPEG XL)" -ForegroundColor Yellow
+                    Write-Host "[DNG]   2) Converteste cu Adobe DNG Converter la DNG 1.6 (backward compat)" -ForegroundColor Yellow
+                    Write-Host "[DNG]   3) Foloseste Lightroom / ACR pentru export TIFF/JPEG intermediar" -ForegroundColor Yellow
+                    continue
+                } elseif ($Verbose) {
+                    Write-Host "[DNG] Preview extraction esuata, continua cu RAW normal" -ForegroundColor Gray
+                }
+            }
+        }
+    }
+
     # ── HDR detection ─────────────────────────────────────────────────
-    $isHdr = Detect-HDR $F.FullName; $hdrAct = Resolve-HDR $isHdr $Format; $tgtD = Get-TgtDepth $hdrAct $Format
+    $isHdr = Detect-HDR $srcPath; $hdrAct = Resolve-HDR $isHdr $Format; $tgtD = Get-TgtDepth $hdrAct $Format
     if($isHdr){$Stats.HdrDet++
         if($hdrAct -eq "tonemap"){Write-Host "[HDR] $($F.Name): tone map SDR" -ForegroundColor Magenta;$Stats.HdrTM++}
         elseif($hdrAct -eq "preserve"){Write-Host "[HDR] $($F.Name): preserve ${tgtD}-bit" -ForegroundColor Magenta;$Stats.HdrPR++}}
@@ -789,6 +921,7 @@ foreach($F in $Files){
         if ($existSz -gt 0) {
             $Skip++; $Stats.SkipExist++
             if ($Verbose) { Write-Host "[SKIP] Already converted: $on ($(Fmt-Size $existSz))" -ForegroundColor Gray }
+            if ($dngPreviewTmp -and (Test-Path $dngPreviewTmp)) { Remove-Item $dngPreviewTmp -Force -ErrorAction SilentlyContinue }
             continue
         }
     }
@@ -797,7 +930,7 @@ foreach($F in $Files){
     if($MaxB -gt 0){
         $curQ=$EffQ
         for($att=0;$att -lt 8;$att++){
-            $r=Convert-Photo $F.FullName $of $curQ $hdrAct $tgtD
+            $r=Convert-Photo $srcPath $of $curQ $hdrAct $tgtD $F.FullName
             if($r -ne "ok" -or -not(Test-Path $of)){break}
             $osz=(Get-Item $of).Length;if($osz -le $MaxB){break}
             $Stats.TotalIn-=(Get-Item $F.FullName).Length;$Stats.TotalOut-=$osz
@@ -805,10 +938,36 @@ foreach($F in $Files){
         }
         switch($r){"ok"{$Conv++}"skipped"{$Skip++}"fail"{$Fail++}}
     }else{
-        $r=Convert-Photo $F.FullName $of $EffQ $hdrAct $tgtD
+        $r=Convert-Photo $srcPath $of $EffQ $hdrAct $tgtD $F.FullName
         switch($r){"ok"{$Conv++}"skipped"{$Skip++}"fail"{$Fail++}}
     }
+
+    # Cleanup DNG preview tmp (if used)
+    if ($dngPreviewTmp -and (Test-Path $dngPreviewTmp)) { Remove-Item $dngPreviewTmp -Force -ErrorAction SilentlyContinue }
 }
+
+if ($Watch) {
+    Start-Sleep -Seconds $WatchInterval
+    $newFiles = @()
+    foreach ($P in $SupportedExtensions) {
+        $newFiles += Get-ChildItem -Path $InputDir -Filter $P -Recurse:(-not $NoRecursive) -File -ErrorAction SilentlyContinue | Where-Object { -not $WatchSeen.ContainsKey($_.FullName) }
+    }
+    $newFiles = @($newFiles | Sort-Object FullName)
+    foreach ($nf in $newFiles) {
+        $WatchSeen[$nf.FullName] = $true
+        # Wait for file size to stabilize (2s window)
+        $prev = -1; $curr = 0
+        while ($prev -ne $curr) {
+            $prev = $curr
+            Start-Sleep -Seconds 2
+            try { $curr = (Get-Item $nf.FullName).Length } catch { $curr = 0 }
+        }
+        Write-Host "[INFO] New file: $($nf.Name)" -ForegroundColor Green
+    }
+    $Files = $newFiles; $Total = $newFiles.Count; $Cnt = 0
+    if ($Total -gt 0) { Write-Host "[INFO] Processing $Total new file(s)..." -ForegroundColor Blue }
+}
+} while ($Watch)
 
 # ── Save Profile Option (interactive only, not dry-run) ─────────────────────
 if ($InteractiveMode -and -not $DryRun) {
@@ -836,6 +995,7 @@ if ($InteractiveMode -and -not $DryRun) {
                 "HdrMode=$hdrModeVal"
                 "UHDR=$UHDR"
                 "DJI=$DJI"
+                "DNGPreview=$($DngPreview.ToString().ToLower())"
                 "StripExif=$($StripExif.ToString().ToLower())"
                 "SRGB=$($SRGB.ToString().ToLower())"
                 "NoAutoRotate=$($NoAutoRotate.ToString().ToLower())"
@@ -888,6 +1048,12 @@ if($Stats.DjiDet -gt 0){
     if($Stats.DjiExport -gt 0){Write-Host "    Exported: $($Stats.DjiExport)"}
     if($Stats.DjiLive -gt 0){Write-Host "    Live Photo: $($Stats.DjiLive)"}
     if($Stats.DjiStrip -gt 0){Write-Host "    Privacy stripped: $($Stats.DjiStrip)"}
+}
+if($Stats.DngDet -gt 0){
+    Write-Host "  DNG files: $($Stats.DngDet)" -ForegroundColor Magenta
+    if($Stats.DngJxl -gt 0){Write-Host "    DNG 1.7+ (JPEG XL): $($Stats.DngJxl)"}
+    if($Stats.DngPreview -gt 0){Write-Host "    Preview extracted: $($Stats.DngPreview)" -ForegroundColor Green}
+    if($Stats.DngFailed -gt 0){Write-Host "    Decode failed: $($Stats.DngFailed)" -ForegroundColor Red}
 }
 Write-Host "────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
 if(-not $DryRun -and -not $MotionOnly -and $Stats.TotalIn -gt 0){

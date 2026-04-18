@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# photo_encoder.sh v4.2 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.3 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.2"
+VERSION="4.3"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
@@ -59,6 +59,9 @@ HAS_EXIFTOOL="false"
 # ── DJI ──────────────────────────────────────────────────────────────────────
 DJI_ACTION=""                 # "" | detect | export | privacy-strip
 
+# ── DNG ──────────────────────────────────────────────────────────────────────
+DNG_PREVIEW_MODE="false"      # true = extract embedded preview JPEG (fast, skip demosaic)
+
 # ── Supported formats ────────────────────────────────────────────────────────
 INPUT_EXTENSIONS="jpg jpeg png heic heif avif webp jxl tiff tif bmp gif raw cr2 nef arw dng orf rw2"
 MOTION_EXTENSIONS="jpg jpeg heic heif"
@@ -67,12 +70,14 @@ UHDR_EXTENSIONS="jpg jpeg"    # Ultra HDR only exists in JPEG containers
 
 # ── Tracking ─────────────────────────────────────────────────────────────────
 declare -A LIVE_PHOTO_PAIRED=() SEEN_HASHES=()
+declare -A DJI_DETECT_CACHE=() UHDR_DETECT_CACHE=()
 STATS_TOTAL_IN_SIZE=0; STATS_TOTAL_OUT_SIZE=0; STATS_START_TIME=0
 declare -A FORMAT_COUNTS=()
 STATS_DUPLICATES_SKIPPED=0; STATS_MINRES_SKIPPED=0; STATS_LOSSLESS_OPTIMIZED=0
 STATS_HDR_DETECTED=0; STATS_HDR_TONEMAPPED=0; STATS_HDR_PRESERVED=0
 STATS_UHDR_DETECTED=0; STATS_UHDR_STRIPPED=0; STATS_UHDR_EXTRACTED=0; STATS_UHDR_DECODED=0
 STATS_DJI_DETECTED=0; STATS_DJI_EXPORTED=0; STATS_DJI_LIVEPHOTO=0; STATS_DJI_STRIPPED=0
+STATS_DNG_DETECTED=0; STATS_DNG_JXL=0; STATS_DNG_FAILED=0; STATS_DNG_PREVIEW=0
 STATS_SKIPPED_EXISTING=0
 # Compression tracking: "filename|in_size|out_size|ratio" per converted file
 COMPRESSION_LOG=""
@@ -148,6 +153,11 @@ WATERMARK:
 
 METADATA & COLOR:
   --strip-exif / --keep-exif   --srgb   --auto-rotate / --no-auto-rotate
+
+DNG:
+  --dng-preview            Extract embedded preview JPEG from DNG (fast path,
+                           skip demosaic). Auto-fallback for DNG 1.7+ that
+                           ImageMagick cannot decode. Requires ExifTool.
 
 OUTPUT NAMING:     --prefix <text>  --suffix <text>
 FILTERS:           --min-res <px>   --skip-duplicates   --lossless-jpeg
@@ -320,6 +330,7 @@ parse_profile_args() {
             --motion-only)        MOTION_ONLY="true"; EXTRACT_MOTION="true"; shift ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
+            --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --skip-existing)      SKIP_EXISTING="true"; shift ;;
             --overwrite)          OVERWRITE="true"; shift ;;
             --no-recursive)       RECURSIVE="false"; shift ;;
@@ -359,6 +370,7 @@ load_profile_conf() {
                 HdrMode)          [[ -n "$val" ]] && HDR_MODE="$val" ;;
                 UHDR)             [[ -n "$val" ]] && UHDR_ACTION="$val" ;;
                 DJI)              [[ -n "$val" ]] && DJI_ACTION="$val" ;;
+                DNGPreview)       [[ "$val" == "true" ]] && DNG_PREVIEW_MODE="true" ;;
                 StripExif)        [[ "$val" == "true" ]] && STRIP_EXIF="true" ;;
                 SRGB)             [[ "$val" == "true" ]] && SRGB_CONVERT="true" ;;
                 NoAutoRotate)     [[ "$val" == "true" ]] && AUTO_ROTATE="false" ;;
@@ -411,6 +423,7 @@ Depth=${BIT_DEPTH}
 HdrMode=${hdr_val}
 UHDR=${UHDR_ACTION}
 DJI=${DJI_ACTION}
+DNGPreview=${DNG_PREVIEW_MODE}
 StripExif=${STRIP_EXIF}
 SRGB=${SRGB_CONVERT}
 NoAutoRotate=$([[ "$AUTO_ROTATE" == "false" ]] && echo "true" || echo "false")
@@ -506,6 +519,8 @@ print_compression_report() {
 run_watch_mode() {
     local input_dir="$1" output_dir="$2"
     declare -A processed_files=()
+    local find_opts=()
+    [[ "$RECURSIVE" == "false" ]] && find_opts=(-maxdepth 1)
 
     log_info "Watch mode started. Monitoring: $input_dir"
     log_info "Interval: ${WATCH_INTERVAL}s. Press Ctrl+C to stop."
@@ -514,7 +529,7 @@ run_watch_mode() {
     # Initial scan — mark existing files as processed
     while IFS= read -r -d '' f; do
         is_supported_image "$f" && processed_files["$f"]=1
-    done < <(find "$input_dir" -type f -print0 2>/dev/null)
+    done < <(find "$input_dir" "${find_opts[@]}" -type f -print0 2>/dev/null)
 
     local initial_count=${#processed_files[@]}
     log_info "Skipped $initial_count existing files. Waiting for new files..."
@@ -547,7 +562,7 @@ run_watch_mode() {
             mkdir -p "$output_dir"
 
             convert_image "$f" "$of" || log_error "Failed: $bn"
-        done < <(find "$input_dir" -type f -print0 2>/dev/null)
+        done < <(find "$input_dir" "${find_opts[@]}" -type f -print0 2>/dev/null)
 
         [[ $new_count -gt 0 ]] && log_info "Processed $new_count new file(s). Watching..."
     done
@@ -557,13 +572,14 @@ run_watch_mode() {
 # Checks: XMP hdrgm: namespace, MPF secondary image, Apple HDR gain map
 detect_uhdr() {
     local file="$1"
-    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo "unknown"; return; }
+    [[ -n "${UHDR_DETECT_CACHE[$file]+x}" ]] && { echo "${UHDR_DETECT_CACHE[$file]}"; return; }
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { UHDR_DETECT_CACHE[$file]="unknown"; echo "unknown"; return; }
 
     # Check for Ultra HDR / Super HDR XMP namespace (hdrgm:)
     local xmp_check
     xmp_check=$(exiftool -s3 -XMP-hdrgm:all "$file" 2>/dev/null | head -5 || echo "")
     if [[ -n "$xmp_check" ]]; then
-        echo "uhdr"  # Google Ultra HDR / Samsung Super HDR
+        UHDR_DETECT_CACHE[$file]="uhdr"; echo "uhdr"  # Google Ultra HDR / Samsung Super HDR
         return
     fi
 
@@ -571,7 +587,7 @@ detect_uhdr() {
     local iso_check
     iso_check=$(exiftool -s3 -XMP-GainMap:all "$file" 2>/dev/null | head -5 || echo "")
     if [[ -n "$iso_check" ]]; then
-        echo "iso21496"  # ISO 21496-1 (Apple Adaptive HDR or Android 15+)
+        UHDR_DETECT_CACHE[$file]="iso21496"; echo "iso21496"  # ISO 21496-1 (Apple Adaptive HDR or Android 15+)
         return
     fi
 
@@ -584,15 +600,15 @@ detect_uhdr() {
         local hdr_xmp
         hdr_xmp=$(exiftool -s3 -HDRPMakerNote -HDRHeadroom "$file" 2>/dev/null | head -5 || echo "")
         if [[ -n "$hdr_xmp" ]]; then
-            echo "adaptive"  # Apple Adaptive HDR
+            UHDR_DETECT_CACHE[$file]="adaptive"; echo "adaptive"  # Apple Adaptive HDR
             return
         fi
         # MPF with multiple images but no HDR XMP — could still be UHDR
-        echo "mpf_possible"
+        UHDR_DETECT_CACHE[$file]="mpf_possible"; echo "mpf_possible"
         return
     fi
 
-    echo "none"
+    UHDR_DETECT_CACHE[$file]="none"; echo "none"
 }
 
 # Get UHDR metadata details
@@ -816,13 +832,14 @@ get_effective_quality() {
 # Returns: "dji" or "none"
 detect_dji_photo() {
     local file="$1"
+    [[ -n "${DJI_DETECT_CACHE[$file]+x}" ]] && { echo "${DJI_DETECT_CACHE[$file]}"; return; }
 
     # Method 1: Check EXIF Make field
     if [[ "$HAS_EXIFTOOL" == "true" ]]; then
         local make
         make=$(exiftool -s3 -Make "$file" 2>/dev/null || echo "")
         if [[ "${make,,}" == *"dji"* ]]; then
-            echo "dji"
+            DJI_DETECT_CACHE[$file]="dji"; echo "dji"
             return
         fi
 
@@ -830,7 +847,7 @@ detect_dji_photo() {
         local dji_xmp
         dji_xmp=$(exiftool -s3 -XMP-drone-dji:all "$file" 2>/dev/null | head -3 || echo "")
         if [[ -n "$dji_xmp" ]]; then
-            echo "dji"
+            DJI_DETECT_CACHE[$file]="dji"; echo "dji"
             return
         fi
 
@@ -838,12 +855,12 @@ detect_dji_photo() {
         local model
         model=$(exiftool -s3 -Model "$file" 2>/dev/null || echo "")
         if [[ "${model,,}" == *"dji"* || "${model,,}" == *"osmo"* || "${model,,}" == *"action"* || "${model,,}" == *"mavic"* || "${model,,}" == *"phantom"* || "${model,,}" == *"mini"* ]]; then
-            echo "dji"
+            DJI_DETECT_CACHE[$file]="dji"; echo "dji"
             return
         fi
     fi
 
-    echo "none"
+    DJI_DETECT_CACHE[$file]="none"; echo "none"
 }
 
 # Get DJI photo metadata summary
@@ -1077,6 +1094,58 @@ get_target_depth() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DNG VERSION DETECTION (DNG 1.0 → 1.7.1.0, JPEG XL compression)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Returns DNG version (e.g. "1.7.1.0") or empty. Requires exiftool.
+detect_dng_version() {
+    local file="$1"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo ""; return; }
+    exiftool -s3 -DNGVersion "$file" 2>/dev/null || echo ""
+}
+
+detect_dng_backward_version() {
+    local file="$1"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo ""; return; }
+    exiftool -s3 -DNGBackwardVersion "$file" 2>/dev/null || echo ""
+}
+
+detect_dng_compression() {
+    local file="$1"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo ""; return; }
+    exiftool -s3 -Compression "$file" 2>/dev/null || echo ""
+}
+
+# Returns "jxl" if DNG uses JPEG XL compression (DNG 1.7+), else "legacy" or "unknown".
+classify_dng() {
+    local ver="$1" comp="$2"
+    [[ "$comp" == *"JPEG XL"* || "$comp" == *"JXL"* ]] && { echo "jxl"; return; }
+    if [[ -n "$ver" ]]; then
+        local minor; minor=$(echo "$ver" | cut -d. -f2 2>/dev/null)
+        [[ "$minor" =~ ^[0-9]+$ && "$minor" -ge 7 ]] && { echo "jxl"; return; }
+        echo "legacy"; return
+    fi
+    echo "unknown"
+}
+
+# Extract embedded preview JPEG from DNG (skip demosaic for fast path).
+# Tries JpgFromRaw → PreviewImage → OtherImage in order. Returns tag name on success.
+# Usage: extract_dng_preview <input.dng> <output.jpg>
+extract_dng_preview() {
+    local input="$1" output="$2"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && return 1
+    local tag
+    for tag in JpgFromRaw PreviewImage OtherImage; do
+        if exiftool -b -"$tag" "$input" > "$output" 2>/dev/null && [[ -s "$output" ]]; then
+            echo "$tag"
+            return 0
+        fi
+    done
+    rm -f "$output" 2>/dev/null
+    return 1
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MOTION / LIVE PHOTO
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1226,6 +1295,60 @@ convert_image() {
         fi
     fi
 
+    # ── DNG version detection (supports DNG 1.0 → 1.7.1.0) ────────────
+    local _ie="${input##*.}"; _ie="${_ie,,}"
+    local dng_preview_tmp=""
+    local orig_input="$input"
+    if [[ "$_ie" == "dng" ]]; then
+        STATS_DNG_DETECTED=$((STATS_DNG_DETECTED + 1))
+        local dng_ver dng_bwd dng_comp dng_class
+        dng_ver=$(detect_dng_version "$input")
+        dng_bwd=$(detect_dng_backward_version "$input")
+        dng_comp=$(detect_dng_compression "$input")
+        dng_class=$(classify_dng "$dng_ver" "$dng_comp")
+
+        if [[ -n "$dng_ver" ]]; then
+            log_verbose "DNG ${dng_ver} (backward: ${dng_bwd:-?}) | Compression: ${dng_comp:-?}"
+        fi
+
+        # Preview extraction path: --dng-preview flag OR auto-fallback for unsupported DNG 1.7+
+        local try_preview="false" dng_reason=""
+        if [[ "$DNG_PREVIEW_MODE" == "true" ]]; then
+            try_preview="true"; dng_reason="fast-mode"
+        elif [[ "$dng_class" == "jxl" ]]; then
+            STATS_DNG_JXL=$((STATS_DNG_JXL + 1))
+            echo -e "${MAGENTA}[DNG]${NC} ${input##*/}: DNG ${dng_ver:-1.7+} (${dng_comp:-JPEG XL})"
+            if ! $IDENTIFY_CMD -format "%w" "$input" &>/dev/null; then
+                try_preview="true"; dng_reason="auto-fallback"
+            fi
+        elif [[ -n "$dng_ver" ]]; then
+            log_verbose "DNG ${dng_ver} — legacy compression, well supported"
+        fi
+
+        if [[ "$try_preview" == "true" ]]; then
+            dng_preview_tmp="${TMPDIR:-/tmp}/dng_preview_$$_$(date +%s%N).jpg"
+            local preview_tag
+            if preview_tag=$(extract_dng_preview "$input" "$dng_preview_tmp"); then
+                STATS_DNG_PREVIEW=$((STATS_DNG_PREVIEW + 1))
+                echo -e "${MAGENTA}[DNG]${NC} Preview extras (${preview_tag}, ${dng_reason}): $(basename "$input")"
+                input="$dng_preview_tmp"
+            else
+                rm -f "$dng_preview_tmp" 2>/dev/null; dng_preview_tmp=""
+                if [[ "$dng_reason" == "auto-fallback" ]]; then
+                    STATS_DNG_FAILED=$((STATS_DNG_FAILED + 1))
+                    echo -e "${RED}[DNG]${NC} ImageMagick nu poate decoda DNG ${dng_ver:-1.7+} si nu exista preview embedded"
+                    echo -e "${YELLOW}[DNG]${NC} Solutii:"
+                    echo -e "${YELLOW}[DNG]${NC}   1) Actualizeaza ImageMagick + LibRaw 0.21+ (suport JPEG XL)"
+                    echo -e "${YELLOW}[DNG]${NC}   2) Converteste cu Adobe DNG Converter la DNG 1.6 (backward compat)"
+                    echo -e "${YELLOW}[DNG]${NC}   3) Foloseste Lightroom / ACR pentru export TIFF/JPEG intermediar"
+                    return 1
+                else
+                    log_verbose "DNG preview extraction esuata, continua cu RAW normal"
+                fi
+            fi
+        fi
+    fi
+
     # ── Classic HDR detection ─────────────────────────────────────────
     local is_hdr="sdr" hdr_action="passthrough" target_depth=""
     is_hdr=$(detect_hdr "$input")
@@ -1234,8 +1357,8 @@ convert_image() {
         hdr_action=$(resolve_hdr_action "$is_hdr" "$OUTPUT_FORMAT")
         target_depth=$(get_target_depth "$hdr_action" "$OUTPUT_FORMAT")
         case "$hdr_action" in
-            tonemap)  log_hdr "$(basename "$input"): HDR → tone map SDR"; STATS_HDR_TONEMAPPED=$((STATS_HDR_TONEMAPPED + 1)) ;;
-            preserve) log_hdr "$(basename "$input"): HDR → preserve ${target_depth}-bit"; STATS_HDR_PRESERVED=$((STATS_HDR_PRESERVED + 1)) ;;
+            tonemap)  log_hdr "$(basename "$orig_input"): HDR → tone map SDR"; STATS_HDR_TONEMAPPED=$((STATS_HDR_TONEMAPPED + 1)) ;;
+            preserve) log_hdr "$(basename "$orig_input"): HDR → preserve ${target_depth}-bit"; STATS_HDR_PRESERVED=$((STATS_HDR_PRESERVED + 1)) ;;
         esac
     else
         target_depth=$(get_target_depth "passthrough" "$OUTPUT_FORMAT")
@@ -1245,7 +1368,7 @@ convert_image() {
     if [[ "$LOSSLESS_JPEG" == "true" && "$OUTPUT_FORMAT" == "jpeg" ]]; then
         local ie="${input##*.}"; ie="${ie,,}"
         if [[ "$ie" == "jpg" || "$ie" == "jpeg" ]]; then
-            [[ "$DRY_RUN" == "true" ]] && { log_dry "Lossless: $(basename "$input")"; return 0; }
+            [[ "$DRY_RUN" == "true" ]] && { log_dry "Lossless: $(basename "$orig_input")"; return 0; }
             local cmd; cmd=$(get_magick_cmd)
             if command -v jpegtran &>/dev/null; then
                 jpegtran -copy none -optimize -progressive -outfile "$output" "$input" 2>/dev/null
@@ -1253,16 +1376,16 @@ convert_image() {
                 $cmd "$input" -strip "$output" 2>/dev/null
             fi
             if [[ -f "$output" ]]; then
-                local isz osz; isz=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null); osz=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
+                local isz osz; isz=$(stat -c%s "$orig_input" 2>/dev/null || stat -f%z "$orig_input" 2>/dev/null); osz=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
                 STATS_TOTAL_IN_SIZE=$((STATS_TOTAL_IN_SIZE + isz)); STATS_TOTAL_OUT_SIZE=$((STATS_TOTAL_OUT_SIZE + osz)); STATS_LOSSLESS_OPTIMIZED=$((STATS_LOSSLESS_OPTIMIZED + 1))
-                echo -e "${GREEN}[LOSSLESS]${NC} $(basename "$input") ${GRAY}($(format_size $isz) → $(format_size $osz))${NC}"
+                echo -e "${GREEN}[LOSSLESS]${NC} $(basename "$orig_input") ${GRAY}($(format_size $isz) → $(format_size $osz))${NC}"
                 return 0
             fi
         fi
     fi
 
     # ── Standard conversion ───────────────────────────────────────────
-    [[ "$DRY_RUN" == "true" ]] && { log_dry "Convert: $(basename "$input") → $(basename "$output") (q$qval, $hdr_action)"; return 0; }
+    [[ "$DRY_RUN" == "true" ]] && { log_dry "Convert: $(basename "$orig_input") → $(basename "$output") (q$qval, $hdr_action)"; return 0; }
 
     local cmd; cmd=$(get_magick_cmd)
 
@@ -1289,18 +1412,20 @@ convert_image() {
                 exiftool -TagsFromFile "$input" -MaxContentLightLevel -MaxFrameAverageLightLevel -ColorPrimaries -TransferCharacteristics -overwrite_original "$output" 2>/dev/null || true
             fi
         fi
-        local isz osz; isz=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null); osz=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
+        local isz osz; isz=$(stat -c%s "$orig_input" 2>/dev/null || stat -f%z "$orig_input" 2>/dev/null); osz=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
         STATS_TOTAL_IN_SIZE=$((STATS_TOTAL_IN_SIZE + isz)); STATS_TOTAL_OUT_SIZE=$((STATS_TOTAL_OUT_SIZE + osz))
         local ratio; ratio=$(awk "BEGIN{printf\"%.0f\",($osz/$isz)*100}"); local c="${GREEN}"; [[ $ratio -gt 100 ]] && c="${YELLOW}"
-        echo -e "${c}[OK]${NC} $(basename "$input") → $(basename "$output") ${GRAY}($(format_size $isz) → $(format_size $osz), ${ratio}%)${NC}"
-        log_compression "$(basename "$input")" "$isz" "$osz"
+        echo -e "${c}[OK]${NC} $(basename "$orig_input") → $(basename "$output") ${GRAY}($(format_size $isz) → $(format_size $osz), ${ratio}%)${NC}"
+        log_compression "$(basename "$orig_input")" "$isz" "$osz"
         if [[ "$COMPARE" == "true" ]]; then
             local saved=$((isz - osz)); local sp; sp=$(awk "BEGIN{printf\"%.1f\",($saved/$isz)*100}")
             echo -e "  ${CYAN}[COMPARE]${NC} $(format_size $isz) → $(format_size $osz) ${GRAY}(${ratio}%, saved $(format_size $saved) / ${sp}%)${NC}"
         fi
+        [[ -n "$dng_preview_tmp" && -f "$dng_preview_tmp" ]] && rm -f "$dng_preview_tmp"
         return 0
     else
-        log_error "Failed: $(basename "$input")"; return 1
+        [[ -n "$dng_preview_tmp" && -f "$dng_preview_tmp" ]] && rm -f "$dng_preview_tmp"
+        log_error "Failed: $(basename "$orig_input")"; return 1
     fi
 }
 
@@ -1336,6 +1461,28 @@ process_files() {
     if [[ "$HAS_EXIFTOOL" == "true" ]]; then
         local dc=0; for f in "${image_files[@]}"; do local dj; dj=$(detect_dji_photo "$f"); [[ "$dj" == "dji" ]] && dc=$((dc+1)); done
         [[ $dc -gt 0 ]] && log_info "Detected $dc DJI photo(s)"
+    fi
+
+    # Pre-scan DNG
+    if [[ "$HAS_EXIFTOOL" == "true" ]]; then
+        local nc=0 njxl=0
+        for f in "${image_files[@]}"; do
+            local ne="${f##*.}"; ne="${ne,,}"
+            if [[ "$ne" == "dng" ]]; then
+                nc=$((nc+1))
+                local nv nco ncl
+                nv=$(detect_dng_version "$f"); nco=$(detect_dng_compression "$f")
+                ncl=$(classify_dng "$nv" "$nco")
+                [[ "$ncl" == "jxl" ]] && njxl=$((njxl+1))
+            fi
+        done
+        if [[ $nc -gt 0 ]]; then
+            if [[ $njxl -gt 0 ]]; then
+                log_info "Detected $nc DNG file(s) — $njxl with DNG 1.7+ (JPEG XL)"
+            else
+                log_info "Detected $nc DNG file(s)"
+            fi
+        fi
     fi
 
     # DJI batch export (runs once before per-file loop, then exits)
@@ -1433,6 +1580,12 @@ process_files() {
         [[ $STATS_DJI_LIVEPHOTO -gt 0 ]]  && echo -e "    Live Photo extracted: ${WHITE}${STATS_DJI_LIVEPHOTO}${NC}"
         [[ $STATS_DJI_STRIPPED -gt 0 ]]   && echo -e "    Privacy stripped:     ${WHITE}${STATS_DJI_STRIPPED}${NC}"
     fi
+    if [[ $STATS_DNG_DETECTED -gt 0 ]]; then
+        echo -e "  ${MAGENTA}DNG files:                ${WHITE}${STATS_DNG_DETECTED}${NC}"
+        [[ $STATS_DNG_JXL -gt 0 ]]     && echo -e "    DNG 1.7+ (JPEG XL):   ${WHITE}${STATS_DNG_JXL}${NC}"
+        [[ $STATS_DNG_PREVIEW -gt 0 ]] && echo -e "    Preview extracted:    ${GREEN}${STATS_DNG_PREVIEW}${NC}"
+        [[ $STATS_DNG_FAILED -gt 0 ]]  && echo -e "    Decode failed:        ${RED}${STATS_DNG_FAILED}${NC}"
+    fi
 
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
     if [[ "$DRY_RUN" != "true" && "$MOTION_ONLY" != "true" && $STATS_TOTAL_IN_SIZE -gt 0 ]]; then
@@ -1483,6 +1636,7 @@ parse_args() {
             --force-hdr)          HDR_MODE="force-hdr"; shift ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
+            --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --strip-exif)         STRIP_EXIF="true"; shift ;;
             --keep-exif)          STRIP_EXIF="false"; shift ;;
             --auto-rotate)        AUTO_ROTATE="true"; shift ;;

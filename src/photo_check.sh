@@ -97,17 +97,100 @@ format_size() {
     else echo "${b} B"; fi
 }
 
+declare -A META=()
+
+# Bulk-load per-file EXIF tags into META assoc array
+# Reduces exiftool calls from ~30 to ~4 per file
+load_meta() {
+    META=()
+    [[ "$HAS_EXIFTOOL" != "true" ]] && return
+    local file="$1" line tag val t
+
+    # Pre-seed expected keys with "" so absent tags hit cache (no fallback exiftool call)
+    for t in Make Model DateTimeOriginal ISO ShutterSpeed FNumber FocalLength \
+             ExposureMode WhiteBalance Orientation ProfileDescription ColorSpace \
+             BitsPerSample DigitalZoomRatio TransferCharacteristics ColorPrimaries \
+             MaxContentLightLevel MaxFrameAverageLightLevel HDRHeadroom \
+             MPImageCount SerialNumber DNGVersion DNGBackwardVersion Compression \
+             GPSDateTime; do
+        META[$t]=""
+    done
+    META["XMP-hdrgm:Version"]=""
+    META["XMP-hdrgm:GainMapMax"]=""
+    META["XMP-hdrgm:HDRCapacityMax"]=""
+    META["XMP-GainMap:Version"]=""
+    META["N:GPSLatitude"]=""
+    META["N:GPSLongitude"]=""
+    META["N:GPSAltitude"]=""
+
+    # Bulk 1: standard EXIF tags (no group ambiguity)
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        tag="${line%%:*}"; val="${line#*:}"
+        tag="${tag// /}"; val="${val# }"
+        [[ -n "$tag" ]] && META[$tag]="$val"
+    done < <(exiftool -s -S \
+        -Make -Model -DateTimeOriginal -ISO -ShutterSpeed -FNumber \
+        -FocalLength -ExposureMode -WhiteBalance -Orientation -ProfileDescription \
+        -ColorSpace -BitsPerSample -DigitalZoomRatio \
+        -TransferCharacteristics -ColorPrimaries \
+        -MaxContentLightLevel -MaxFrameAverageLightLevel -HDRHeadroom \
+        -MPImageCount -SerialNumber -DNGVersion -DNGBackwardVersion -Compression \
+        -GPSDateTime "$file" 2>/dev/null)
+
+    # Bulk 2: Ultra HDR hdrgm tags (stored with group prefix)
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        tag="${line%%:*}"; val="${line#*:}"
+        tag="${tag// /}"; val="${val# }"
+        [[ -n "$tag" ]] && META["XMP-hdrgm:$tag"]="$val"
+    done < <(exiftool -s -S \
+        -XMP-hdrgm:Version -XMP-hdrgm:GainMapMax -XMP-hdrgm:HDRCapacityMax \
+        "$file" 2>/dev/null)
+    local iso_gm; iso_gm=$(exiftool -s3 -XMP-GainMap:Version "$file" 2>/dev/null || echo "")
+    [[ -n "$iso_gm" ]] && META["XMP-GainMap:Version"]="$iso_gm"
+
+    # Bulk 3: DJI XMP tags (only if Make/Model indicates DJI)
+    local _mk="${META[Make]:-}" _md="${META[Model]:-}"
+    _mk="${_mk,,}"; _md="${_md,,}"
+    if [[ "$_mk" == *"dji"* || "$_md" == *"dji"* || "$_md" == *"osmo"* || "$_md" == *"action"* || "$_md" == *"mavic"* ]]; then
+        for t in SpeedX SpeedY SpeedZ GimbalPitchDegree GimbalYawDegree GimbalRollDegree \
+                 FlightPitchDegree FlightYawDegree FlightRollDegree \
+                 AbsoluteAltitude RelativeAltitude CameraSN; do
+            META["XMP-drone-dji:$t"]=""
+        done
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            tag="${line%%:*}"; val="${line#*:}"
+            tag="${tag// /}"; val="${val# }"
+            [[ -n "$tag" ]] && META["XMP-drone-dji:$tag"]="$val"
+        done < <(exiftool -s -S -XMP-drone-dji:all "$file" 2>/dev/null)
+    fi
+
+    # Bulk 4: GPS numeric
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        tag="${line%%:*}"; val="${line#*:}"
+        tag="${tag// /}"; val="${val# }"
+        [[ -n "$tag" ]] && META["N:$tag"]="$val"
+    done < <(exiftool -s -S -n -GPSLatitude -GPSLongitude -GPSAltitude "$file" 2>/dev/null)
+}
+
 safe_exif() {
-    # Get exiftool value, return empty string if not found
+    # Get exiftool value from META cache (populated by load_meta), fallback to direct call
     local file="$1" tag="$2"
     [[ "$HAS_EXIFTOOL" != "true" ]] && { echo ""; return; }
+    local key="${tag#-}"
+    [[ -n "${META[$key]+x}" ]] && { echo "${META[$key]}"; return; }
     exiftool -s3 "$tag" "$file" 2>/dev/null || echo ""
 }
 
 safe_exif_n() {
-    # Get exiftool numeric value
+    # Get exiftool numeric value from META cache
     local file="$1" tag="$2"
     [[ "$HAS_EXIFTOOL" != "true" ]] && { echo ""; return; }
+    local key="N:${tag#-}"
+    [[ -n "${META[$key]+x}" ]] && { echo "${META[$key]}"; return; }
     exiftool -s3 -n "$tag" "$file" 2>/dev/null || echo ""
 }
 
@@ -126,6 +209,9 @@ analyze_image() {
     local file="$1"
     local bn="${file##*/}"
     local ext="${bn##*.}"; ext="${ext,,}"
+
+    # Bulk-load EXIF tags into META cache (1 call vs ~30)
+    load_meta "$file"
 
     # ── Basic info (ImageMagick) ──────────────────────────────────────
     local im_info
@@ -215,6 +301,23 @@ analyze_image() {
         fi
     fi
 
+    # ── DNG version (1.0 → 1.7.1.0, detects JPEG XL compression) ──────
+    dng_version=""
+    dng_backward=""
+    dng_compression=""
+    dng_class=""
+    if [[ "$ext" == "dng" && "$HAS_EXIFTOOL" == "true" ]]; then
+        dng_version=$(safe_exif "$file" "-DNGVersion")
+        dng_backward=$(safe_exif "$file" "-DNGBackwardVersion")
+        dng_compression=$(safe_exif "$file" "-Compression")
+        if [[ "$dng_compression" == *"JPEG XL"* || "$dng_compression" == *"JXL"* ]]; then
+            dng_class="jxl"
+        elif [[ -n "$dng_version" ]]; then
+            local _dmin; _dmin=$(echo "$dng_version" | cut -d. -f2 2>/dev/null)
+            if [[ "$_dmin" =~ ^[0-9]+$ && "$_dmin" -ge 7 ]]; then dng_class="jxl"; else dng_class="legacy"; fi
+        fi
+    fi
+
     # ── GPS ────────────────────────────────────────────────────────────
     gps_lat=""
     local gps_lon gps_alt gps_datetime
@@ -256,7 +359,15 @@ analyze_image() {
         recommendation="AVIF 10-bit (preserve HDR) sau JPEG (tone map SDR)"
     elif [[ "$ext" == "heic" || "$ext" == "heif" ]]; then
         recommendation="AVIF (mai mic) sau JPEG (universal)"
-    elif [[ "$ext" == "dng" || "$ext" == "cr2" || "$ext" == "nef" || "$ext" == "arw" ]]; then
+    elif [[ "$ext" == "dng" ]]; then
+        if [[ "$dng_class" == "jxl" ]]; then
+            recommendation="DNG ${dng_version:-1.7+} JPEG XL — ImageMagick + LibRaw 0.21+ sau Adobe DNG Converter -> 1.6"
+        elif [[ -n "$dng_version" ]]; then
+            recommendation="DNG ${dng_version} -> JPEG/AVIF (quality archive/print)"
+        else
+            recommendation="JPEG/AVIF (din RAW, quality archive/print)"
+        fi
+    elif [[ "$ext" == "cr2" || "$ext" == "nef" || "$ext" == "arw" ]]; then
         recommendation="JPEG/AVIF (din RAW, quality archive/print)"
     elif [[ "$ext" == "png" ]]; then
         recommendation="WEBP/AVIF (daca nu e nevoie de lossless)"
@@ -297,6 +408,14 @@ analyze_image() {
             [[ -n "$dji_speed_x" ]] && echo -e "          Speed: X=${dji_speed_x} Y=${dji_speed_y} Z=${dji_speed_z}"
             [[ -n "$dji_abs_alt" ]] && echo -e "          Alt: abs=${dji_abs_alt} rel=${dji_rel_alt}"
             [[ -n "$dji_serial" ]] && echo -e "          SN: ${dji_serial}"
+        fi
+
+        # DNG version
+        if [[ -n "$dng_version" ]]; then
+            local _dc="${MAGENTA}"; [[ "$dng_class" == "jxl" ]] && _dc="${YELLOW}"
+            echo -e "  ${_dc}DNG:${NC}    v${dng_version} | Compression: ${dng_compression:-?}"
+            [[ -n "$dng_backward" ]] && echo -e "          Backward: v${dng_backward}"
+            [[ "$dng_class" == "jxl" ]] && echo -e "          ${YELLOW}JPEG XL — may need LibRaw 0.21+ or Adobe DNG Converter${NC}"
         fi
 
         # GPS
@@ -368,6 +487,9 @@ analyze_image() {
     CSV_ROW+="$(csv_escape "$dji_abs_alt"),"
     CSV_ROW+="$(csv_escape "$dji_rel_alt"),"
     CSV_ROW+="$(csv_escape "$dji_serial"),"
+    CSV_ROW+="$(csv_escape "$dng_version"),"
+    CSV_ROW+="$(csv_escape "$dng_backward"),"
+    CSV_ROW+="$(csv_escape "$dng_compression"),"
     CSV_ROW+="$(csv_escape "$gps_lat"),"
     CSV_ROW+="$(csv_escape "$gps_lon"),"
     CSV_ROW+="$(csv_escape "$gps_alt"),"
@@ -424,11 +546,12 @@ main() {
     echo ""
 
     # CSV header
-    echo "Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" > "$CSV_FILE"
+    echo "Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,DNGVersion,DNGBackwardVersion,DNGCompression,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" > "$CSV_FILE"
 
     # Counters
     local count=0
     local cnt_hdr=0 cnt_uhdr=0 cnt_dji=0 cnt_motion=0 cnt_gps=0
+    local cnt_dng=0 cnt_dng_jxl=0
     local total_size=0
 
     for file in "${image_files[@]}"; do
@@ -450,6 +573,8 @@ main() {
         [[ "$is_dji" == "yes" ]] && cnt_dji=$((cnt_dji + 1))
         [[ "$motion_type" != "none" ]] && cnt_motion=$((cnt_motion + 1))
         [[ -n "$gps_lat" ]] && cnt_gps=$((cnt_gps + 1))
+        [[ -n "$dng_version" ]] && cnt_dng=$((cnt_dng + 1))
+        [[ "$dng_class" == "jxl" ]] && cnt_dng_jxl=$((cnt_dng_jxl + 1))
     done
 
     # ── Summary ───────────────────────────────────────────────────────
@@ -462,11 +587,12 @@ main() {
     [[ $cnt_hdr -gt 0 ]]    && echo -e "  HDR images:         ${MAGENTA}${cnt_hdr}${NC}"
     [[ $cnt_uhdr -gt 0 ]]   && echo -e "  Ultra HDR images:   ${BLUE}${cnt_uhdr}${NC}"
     [[ $cnt_dji -gt 0 ]]    && echo -e "  DJI photos:         ${GREEN}${cnt_dji}${NC}"
+    [[ $cnt_dng -gt 0 ]]    && { echo -e "  DNG files:          ${MAGENTA}${cnt_dng}${NC}"; [[ $cnt_dng_jxl -gt 0 ]] && echo -e "    DNG 1.7+ (JXL):   ${YELLOW}${cnt_dng_jxl}${NC}"; }
     [[ $cnt_motion -gt 0 ]] && echo -e "  Motion/Live Photo:  ${CYAN}${cnt_motion}${NC}"
     [[ $cnt_gps -gt 0 ]]    && echo -e "  With GPS:           ${WHITE}${cnt_gps}${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
     echo -e "  CSV:  ${WHITE}${CSV_FILE}${NC}"
-    echo -e "        ${GRAY}50 campuri per imagine (deschide in Excel/Google Sheets)${NC}"
+    echo -e "        ${GRAY}54 campuri per imagine (deschide in Excel/Google Sheets)${NC}"
     echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
     echo ""
 }

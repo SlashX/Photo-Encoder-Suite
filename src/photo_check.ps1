@@ -56,14 +56,108 @@ function Fmt-Size([long]$B) {
     else { "$B B" }
 }
 
+$script:Meta = @{}
+
+# Bulk-load per-file EXIF tags into $script:Meta hashtable
+# Reduces exiftool calls from ~30 to ~4 per file
+function Load-Meta([string]$File) {
+    $script:Meta = @{}
+    if (-not $HasExiftool) { return }
+
+    # Pre-seed expected keys with "" so absent tags hit cache (no fallback exiftool call)
+    foreach ($t in @("Make","Model","DateTimeOriginal","ISO","ShutterSpeed","FNumber",
+                     "FocalLength","ExposureMode","WhiteBalance","Orientation","ProfileDescription",
+                     "ColorSpace","BitsPerSample","DigitalZoomRatio","TransferCharacteristics",
+                     "ColorPrimaries","MaxContentLightLevel","MaxFrameAverageLightLevel","HDRHeadroom",
+                     "MPImageCount","SerialNumber","DNGVersion","DNGBackwardVersion","Compression",
+                     "GPSDateTime")) { $script:Meta[$t] = "" }
+    foreach ($t in @("XMP-hdrgm:Version","XMP-hdrgm:GainMapMax","XMP-hdrgm:HDRCapacityMax",
+                     "XMP-GainMap:Version")) { $script:Meta[$t] = "" }
+    foreach ($t in @("N:GPSLatitude","N:GPSLongitude","N:GPSAltitude")) { $script:Meta[$t] = "" }
+
+    # Bulk 1: standard EXIF tags
+    try {
+        $out = & exiftool -s -S `
+            -Make -Model -DateTimeOriginal -ISO -ShutterSpeed -FNumber `
+            -FocalLength -ExposureMode -WhiteBalance -Orientation -ProfileDescription `
+            -ColorSpace -BitsPerSample -DigitalZoomRatio `
+            -TransferCharacteristics -ColorPrimaries `
+            -MaxContentLightLevel -MaxFrameAverageLightLevel -HDRHeadroom `
+            -MPImageCount -SerialNumber -DNGVersion -DNGBackwardVersion -Compression `
+            -GPSDateTime "$File" 2>$null
+        foreach ($line in $out) {
+            if (-not $line) { continue }
+            $idx = $line.IndexOf(":")
+            if ($idx -lt 1) { continue }
+            $tag = $line.Substring(0,$idx).Trim()
+            $val = $line.Substring($idx+1).Trim()
+            if ($tag) { $script:Meta[$tag] = $val }
+        }
+    } catch {}
+    # Bulk 2: Ultra HDR hdrgm + ISO GainMap
+    try {
+        $out = & exiftool -s -S `
+            -XMP-hdrgm:Version -XMP-hdrgm:GainMapMax -XMP-hdrgm:HDRCapacityMax `
+            -XMP-GainMap:Version "$File" 2>$null
+        foreach ($line in $out) {
+            if (-not $line) { continue }
+            $idx = $line.IndexOf(":")
+            if ($idx -lt 1) { continue }
+            $tag = $line.Substring(0,$idx).Trim()
+            $val = $line.Substring($idx+1).Trim()
+            if (-not $tag) { continue }
+            if ($tag -eq "Version") { $script:Meta["XMP-hdrgm:Version"] = $val }
+            elseif ($tag -eq "GainMapMax") { $script:Meta["XMP-hdrgm:GainMapMax"] = $val }
+            elseif ($tag -eq "HDRCapacityMax") { $script:Meta["XMP-hdrgm:HDRCapacityMax"] = $val }
+        }
+    } catch {}
+    # Bulk 3: DJI XMP (only if Make/Model indicates DJI)
+    $mk = ($script:Meta["Make"] + "").ToLower()
+    $md = ($script:Meta["Model"] + "").ToLower()
+    if ($mk -match "dji" -or $md -match "dji|osmo|action|mavic") {
+        foreach ($t in @("SpeedX","SpeedY","SpeedZ","GimbalPitchDegree","GimbalYawDegree",
+                         "GimbalRollDegree","FlightPitchDegree","FlightYawDegree","FlightRollDegree",
+                         "AbsoluteAltitude","RelativeAltitude","CameraSN")) {
+            $script:Meta["XMP-drone-dji:$t"] = ""
+        }
+        try {
+            $out = & exiftool -s -S -XMP-drone-dji:all "$File" 2>$null
+            foreach ($line in $out) {
+                if (-not $line) { continue }
+                $idx = $line.IndexOf(":")
+                if ($idx -lt 1) { continue }
+                $tag = $line.Substring(0,$idx).Trim()
+                $val = $line.Substring($idx+1).Trim()
+                if ($tag) { $script:Meta["XMP-drone-dji:$tag"] = $val }
+            }
+        } catch {}
+    }
+    # Bulk 4: GPS numeric
+    try {
+        $out = & exiftool -s -S -n -GPSLatitude -GPSLongitude -GPSAltitude "$File" 2>$null
+        foreach ($line in $out) {
+            if (-not $line) { continue }
+            $idx = $line.IndexOf(":")
+            if ($idx -lt 1) { continue }
+            $tag = $line.Substring(0,$idx).Trim()
+            $val = $line.Substring($idx+1).Trim()
+            if ($tag) { $script:Meta["N:$tag"] = $val }
+        }
+    } catch {}
+}
+
 function Safe-Exif([string]$File, [string]$Tag) {
     if (-not $HasExiftool) { return "" }
+    $key = $Tag.TrimStart("-")
+    if ($script:Meta.ContainsKey($key)) { return $script:Meta[$key] }
     try { $val = & exiftool -s3 $Tag "$File" 2>$null; if ($val) { return $val.Trim() } } catch {}
     return ""
 }
 
 function Safe-ExifN([string]$File, [string]$Tag) {
     if (-not $HasExiftool) { return "" }
+    $key = "N:" + $Tag.TrimStart("-")
+    if ($script:Meta.ContainsKey($key)) { return $script:Meta[$key] }
     try { $val = & exiftool -s3 -n $Tag "$File" 2>$null; if ($val) { return $val.Trim() } } catch {}
     return ""
 }
@@ -97,10 +191,10 @@ Write-Host "[INFO] Found $Total image(s) to analyze" -ForegroundColor Green
 Write-Host ""
 
 # ── CSV header ───────────────────────────────────────────────────────────────
-"Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" | Out-File $CsvFile -Encoding utf8
+"Filename,Extension,Width,Height,Megapixels,BitDepth,Format,FileSize,ColorSpace,Make,Model,DateTime,ISO,ShutterSpeed,FNumber,FocalLength,ExposureMode,WhiteBalance,Orientation,ColorProfile,BitsPerSample,IsHDR,TransferCharacteristics,ColorPrimaries,MaxCLL,MaxFALL,HDRHeadroom,IsUltraHDR,UHDRVersion,GainMapMax,HDRCapacityMax,MPFCount,IsDJI,DJI_SpeedX,DJI_SpeedY,DJI_SpeedZ,DJI_GimbalPitch,DJI_GimbalYaw,DJI_GimbalRoll,DJI_FlightPitch,DJI_FlightYaw,DJI_FlightRoll,DJI_AbsAltitude,DJI_RelAltitude,DJI_SerialNumber,DNGVersion,DNGBackwardVersion,DNGCompression,GPSLatitude,GPSLongitude,GPSAltitude,GPSDateTime,MotionPhoto,Recommendation" | Out-File $CsvFile -Encoding utf8
 
 # ── Counters ─────────────────────────────────────────────────────────────────
-$cnt = 0; $cntHdr = 0; $cntUhdr = 0; $cntDji = 0; $cntMotion = 0; $cntGps = 0
+$cnt = 0; $cntHdr = 0; $cntUhdr = 0; $cntDji = 0; $cntMotion = 0; $cntGps = 0; $cntDng = 0; $cntDngJxl = 0
 $totalSize = [long]0
 
 # ── Analyze each file ────────────────────────────────────────────────────────
@@ -111,6 +205,9 @@ foreach ($F in $Files) {
     $filePath = $F.FullName
     $fileSize = $F.Length
     $totalSize += $fileSize
+
+    # Bulk-load EXIF tags into $script:Meta cache (1 call vs ~30)
+    Load-Meta $filePath
 
     if (-not $CsvOnly) {
         $pct = [math]::Round($cnt/$Total*100)
@@ -199,6 +296,19 @@ foreach ($F in $Files) {
         }
     }
 
+    # ── DNG version (1.0 -> 1.7.1.0, detects JPEG XL compression) ────
+    $dngVersion = ""; $dngBackward = ""; $dngCompression = ""; $dngClass = ""
+    if ($ext -eq "dng" -and $HasExiftool) {
+        $dngVersion = Safe-Exif $filePath "-DNGVersion"
+        $dngBackward = Safe-Exif $filePath "-DNGBackwardVersion"
+        $dngCompression = Safe-Exif $filePath "-Compression"
+        if ($dngCompression -match "JPEG\s*XL|JXL") {
+            $dngClass = "jxl"
+        } elseif ($dngVersion -match "^(\d+)\.(\d+)") {
+            if ([int]$Matches[2] -ge 7) { $dngClass = "jxl" } else { $dngClass = "legacy" }
+        }
+    }
+
     # ── GPS ───────────────────────────────────────────────────────────
     $gpsLat = Safe-ExifN $filePath "-GPSLatitude"
     $gpsLon = Safe-ExifN $filePath "-GPSLongitude"
@@ -249,7 +359,16 @@ foreach ($F in $Files) {
         $recommendation = "AVIF 10-bit (preserve HDR) sau JPEG (tone map SDR)"
     } elseif ($ext -in "heic","heif") {
         $recommendation = "AVIF (mai mic) sau JPEG (universal)"
-    } elseif ($ext -in "dng","cr2","nef","arw") {
+    } elseif ($ext -eq "dng") {
+        if ($dngClass -eq "jxl") {
+            $verLabel = if ($dngVersion) { $dngVersion } else { "1.7+" }
+            $recommendation = "DNG $verLabel JPEG XL - ImageMagick + LibRaw 0.21+ sau Adobe DNG Converter -> 1.6"
+        } elseif ($dngVersion) {
+            $recommendation = "DNG $dngVersion -> JPEG/AVIF (quality archive/print)"
+        } else {
+            $recommendation = "JPEG/AVIF (din RAW, quality archive/print)"
+        }
+    } elseif ($ext -in "cr2","nef","arw") {
         $recommendation = "JPEG/AVIF (din RAW, quality archive/print)"
     } elseif ($ext -eq "png") {
         $recommendation = "WEBP/AVIF (daca nu e nevoie de lossless)"
@@ -268,6 +387,8 @@ foreach ($F in $Files) {
     if ($isDji -eq "yes") { $cntDji++ }
     if ($motionType -ne "none") { $cntMotion++ }
     if ($gpsLat) { $cntGps++ }
+    if ($dngVersion) { $cntDng++ }
+    if ($dngClass -eq "jxl") { $cntDngJxl++ }
 
     # ── Terminal display ─────────────────────────────────────────────
     if (-not $CsvOnly) {
@@ -289,6 +410,12 @@ foreach ($F in $Files) {
             if ($djiSpeedX) { Write-Host "          Speed: X=$djiSpeedX Y=$djiSpeedY Z=$djiSpeedZ" -ForegroundColor Gray }
             if ($djiAbsAlt) { Write-Host "          Alt: abs=$djiAbsAlt rel=$djiRelAlt" -ForegroundColor Gray }
             if ($djiSerial) { Write-Host "          SN: $djiSerial" -ForegroundColor Gray }
+        }
+        if ($dngVersion) {
+            $dngColor = if ($dngClass -eq "jxl") { "Yellow" } else { "Magenta" }
+            Write-Host "  DNG:    v$dngVersion | Compression: $dngCompression" -ForegroundColor $dngColor
+            if ($dngBackward) { Write-Host "          Backward: v$dngBackward" -ForegroundColor Gray }
+            if ($dngClass -eq "jxl") { Write-Host "          JPEG XL - may need LibRaw 0.21+ or Adobe DNG Converter" -ForegroundColor Yellow }
         }
         if ($gpsLat) { Write-Host "  GPS:    $gpsLat, $gpsLon | Alt: ${gpsAlt}m" -ForegroundColor Gray }
         if ($motionType -ne "none") { Write-Host "  Motion: $motionType" -ForegroundColor Cyan }
@@ -317,6 +444,7 @@ foreach ($F in $Files) {
         (Csv-Escape $djiGimbalP), (Csv-Escape $djiGimbalY), (Csv-Escape $djiGimbalR),
         (Csv-Escape $djiFlightP), (Csv-Escape $djiFlightY), (Csv-Escape $djiFlightR),
         (Csv-Escape $djiAbsAlt), (Csv-Escape $djiRelAlt), (Csv-Escape $djiSerial),
+        (Csv-Escape $dngVersion), (Csv-Escape $dngBackward), (Csv-Escape $dngCompression),
         (Csv-Escape $gpsLat), (Csv-Escape $gpsLon), (Csv-Escape $gpsAlt), (Csv-Escape $gpsDatetime),
         (Csv-Escape $motionType), (Csv-Escape $recommendation)
     ) -join ","
@@ -333,9 +461,13 @@ Write-Host "  Total size:         $(Fmt-Size $totalSize)" -ForegroundColor White
 if ($cntHdr -gt 0) { Write-Host "  HDR images:         $cntHdr" -ForegroundColor Magenta }
 if ($cntUhdr -gt 0) { Write-Host "  Ultra HDR images:   $cntUhdr" -ForegroundColor Blue }
 if ($cntDji -gt 0) { Write-Host "  DJI photos:         $cntDji" -ForegroundColor Green }
+if ($cntDng -gt 0) {
+    Write-Host "  DNG files:          $cntDng" -ForegroundColor Magenta
+    if ($cntDngJxl -gt 0) { Write-Host "    DNG 1.7+ (JXL):   $cntDngJxl" -ForegroundColor Yellow }
+}
 if ($cntMotion -gt 0) { Write-Host "  Motion/Live Photo:  $cntMotion" -ForegroundColor Cyan }
 if ($cntGps -gt 0) { Write-Host "  With GPS:           $cntGps" -ForegroundColor White }
 Write-Host "────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
 Write-Host "  CSV:  $CsvFile" -ForegroundColor White
-Write-Host "        50 campuri per imagine (deschide in Excel/Google Sheets)" -ForegroundColor Gray
+Write-Host "        54 campuri per imagine (deschide in Excel/Google Sheets)" -ForegroundColor Gray
 Write-Host "================================================================`n" -ForegroundColor Cyan

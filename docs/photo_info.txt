@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.2
+  Photo Encoder Suite v4.3
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -379,7 +379,7 @@ Lossless JPEG                    ✓              ✓
 Compression report               ✓              ✓
 Progress bar                     ✓              ✓
 Max-size retry loop              ✓              ✓
-Watch mode                       ✓              ✗
+Watch mode                       ✓              ✓
 HEIC/JXL output check            ✓              ✓
 Parallel jobs (ready)            ✓              ✗
 Launcher meniu                   ✓              ✗

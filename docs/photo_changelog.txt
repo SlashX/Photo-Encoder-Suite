@@ -3,6 +3,46 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.3 — Watch mode PS1 + bulk exiftool perf + DNG preview fix + caching
+───────────────────────────────────────────────────────────────
+  FIX photo_encoder.sh — bug: cand DNG preview este extras, log-ul de
+    conversie afisa numele fisierului temporar /tmp/dng_preview_*.jpg
+    in loc de DNG-ul original; introdus $orig_input preservat inainte
+    de reassignment; aliniat la toate call-urile (HDR log, lossless
+    dry-run, dry-run standard, OK block, failed log)
+  FIX photo_encoder.ps1 — acelasi bug DNG preview: adaugat parametru
+    $OrigIn in Convert-Photo, toate log/isz/compression/FAIL folosesc
+    $OrigIn in loc de $In (temp path)
+  ADD photo_encoder.ps1 — Watch mode (paritate cu SH):
+    --watch / -Watch, --watch-interval / -WatchInterval <secunde>
+    do { ... } while ($Watch) wrapper + polling file-size stability 2s
+    inainte de procesare; fisierele pre-existente marcate in $WatchSeen
+    pentru a fi skipped la primul ciclu
+  UPDATE photo_encoder.sh — cache pentru detect_uhdr() si detect_dji_photo():
+    declare -A UHDR_DETECT_CACHE DJI_DETECT_CACHE; rezultate memorate
+    per fisier, evita exiftool calls redundante in acelasi batch
+  UPDATE photo_encoder.ps1 — cache similar: $script:UhdrCache, $script:DjiCache
+    hashtabele verificate la intrarea Detect-UHDR / Detect-DJIPhoto
+  UPDATE photo_check.sh — optimizare majora exiftool: load_meta() face
+    ~4 bulk calls per fisier (standard EXIF, XMP-hdrgm, XMP-drone-dji
+    doar daca Make/Model DJI, GPS numeric) in loc de ~30 calls;
+    safe_exif / safe_exif_n citesc din META asociativ, fallback direct
+  UPDATE photo_check.ps1 — acelasi pattern: Load-Meta + $script:Meta
+    hashtable, Safe-Exif / Safe-ExifN verifica cache-ul inainte de call
+  SYNC SH+PS1 Watch mode — paritate completa (flag, interval, polling)
+  SYNC SH+PS1 caching detect_uhdr / detect_dji_photo
+  SYNC SH+PS1 bulk exiftool pentru photo_check (perf ~7x pe fisier)
+  UPDATE photo_check SH+PS1 — pre-seed META cu "" pentru toate tag-urile
+    interogate (standard EXIF + hdrgm + GPS + DJI conditional), deci
+    safe_exif hit cache 100% chiar si pentru tag-uri absente in fisier
+    (elimina complet fallback direct call, ~7x → ~10x perf)
+  FIX photo_check.ps1 — Load-Meta era definit dar niciodata apelat;
+    adaugat Load-Meta $filePath la inceputul foreach-ului (cache-ul PS1
+    era inactiv si toate Safe-Exif cadeau pe direct call)
+  FIX photo_encoder.sh run_watch_mode — find nu respecta RECURSIVE=false;
+    adaugat -maxdepth 1 conditional, aliniat cu PS1 (-Recurse:(-not $NoRecursive))
+
+
   v4.2 — Quality presets max/thumb + compare + auto-suggest + extended stats
 ───────────────────────────────────────────────────────────────
   ADD quality preset "max" — calitate maxima fara pierdere vizibila
