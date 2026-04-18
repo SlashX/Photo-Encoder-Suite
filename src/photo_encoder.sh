@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# photo_encoder.sh v4.3 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.4 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.3"
+VERSION="4.4"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
@@ -35,8 +35,12 @@ STRIP_EXIF="false"; AUTO_ROTATE="true"; SRGB_CONVERT="false"
 WATERMARK_TEXT=""; WATERMARK_IMAGE=""; WATERMARK_POSITION="SouthEast"; WATERMARK_OPACITY=30
 OUTPUT_PREFIX=""; OUTPUT_SUFFIX=""; MIN_RESOLUTION=0
 LOSSLESS_JPEG="false"; SKIP_DUPLICATES="false"
+SKIP_SIMILAR="false"; SKIP_SIMILAR_THRESHOLD=5   # perceptual dupe detection (dHash 64-bit, Hamming distance)
 PRESERVE_STRUCTURE="true"; OVERWRITE="false"; RECURSIVE="true"
 EXTRACT_MOTION="false"; MOTION_ONLY="false"
+MOTION_SHAREABLE="false"          # remux embedded video with faststart (requires ffmpeg, else best-effort)
+MOTION_SHAREABLE_STRICT="false"   # hard-fail if ffmpeg missing
+HAS_FFMPEG="false"                # set in check_dependencies
 DRY_RUN="false"; VERBOSE="false"; COMPARE="false"
 
 # ── Batch / Watch ───────────────────────────────────────────────────────────
@@ -57,7 +61,9 @@ HAS_ULTRAHDR_APP="false"     # set in check_dependencies
 HAS_EXIFTOOL="false"
 
 # ── DJI ──────────────────────────────────────────────────────────────────────
-DJI_ACTION=""                 # "" | detect | export | privacy-strip
+DJI_ACTION=""                 # "" | detect | export | privacy-strip | clean
+DJI_BURST_GROUP=""            # "" | first | all | skip  (burst filename: DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG)
+declare -A DJI_BURST_SKIP=()  # key=absolute path of secondary burst photo to skip
 
 # ── DNG ──────────────────────────────────────────────────────────────────────
 DNG_PREVIEW_MODE="false"      # true = extract embedded preview JPEG (fast, skip demosaic)
@@ -70,13 +76,17 @@ UHDR_EXTENSIONS="jpg jpeg"    # Ultra HDR only exists in JPEG containers
 
 # ── Tracking ─────────────────────────────────────────────────────────────────
 declare -A LIVE_PHOTO_PAIRED=() SEEN_HASHES=()
+declare -a SEEN_PHASHES=()        # list of 64-bit hex hashes of already-processed images
+STATS_SIMILAR_SKIPPED=0
 declare -A DJI_DETECT_CACHE=() UHDR_DETECT_CACHE=()
 STATS_TOTAL_IN_SIZE=0; STATS_TOTAL_OUT_SIZE=0; STATS_START_TIME=0
 declare -A FORMAT_COUNTS=()
 STATS_DUPLICATES_SKIPPED=0; STATS_MINRES_SKIPPED=0; STATS_LOSSLESS_OPTIMIZED=0
 STATS_HDR_DETECTED=0; STATS_HDR_TONEMAPPED=0; STATS_HDR_PRESERVED=0
 STATS_UHDR_DETECTED=0; STATS_UHDR_STRIPPED=0; STATS_UHDR_EXTRACTED=0; STATS_UHDR_DECODED=0
-STATS_DJI_DETECTED=0; STATS_DJI_EXPORTED=0; STATS_DJI_LIVEPHOTO=0; STATS_DJI_STRIPPED=0
+STATS_DJI_DETECTED=0; STATS_DJI_EXPORTED=0; STATS_DJI_LIVEPHOTO=0; STATS_DJI_STRIPPED=0; STATS_DJI_CLEANED=0; STATS_DJI_CLEAN_SAVED=0
+STATS_DJI_BURST_GROUPS=0; STATS_DJI_BURST_SKIPPED=0
+STATS_MOTION_SHAREABLE_REMUX=0; STATS_MOTION_SHAREABLE_BEST=0; STATS_MOTION_SHAREABLE_WARN=0; STATS_MOTION_SHAREABLE_FAILED=0
 STATS_DNG_DETECTED=0; STATS_DNG_JXL=0; STATS_DNG_FAILED=0; STATS_DNG_PREVIEW=0
 STATS_SKIPPED_EXISTING=0
 # Compression tracking: "filename|in_size|out_size|ratio" per converted file
@@ -159,9 +169,25 @@ DNG:
                            skip demosaic). Auto-fallback for DNG 1.7+ that
                            ImageMagick cannot decode. Requires ExifTool.
 
+DJI:
+  --dji detect             Detect DJI photos, show metadata summary
+  --dji export             Export 24-field CSV (per-batch)
+  --dji privacy-strip      Nuclear wipe: serial, GPS, Make/Model, device info
+  --dji clean              Strip serial + telemetry + binary debug (~65KB saved)
+                            Keeps GPS, camera model, altitudes — good for sharing
+  --dji-burst-group <mode> Handle DJI Action burst photos (filename: DJI_..._D_NNN.JPG)
+                            first  = keep only _001 of each burst, skip rest
+                            skip   = skip ALL burst photos (keep only single shots)
+                            all    = process every photo (default without flag)
+
 OUTPUT NAMING:     --prefix <text>  --suffix <text>
-FILTERS:           --min-res <px>   --skip-duplicates   --lossless-jpeg
+FILTERS:           --min-res <px>   --skip-duplicates   --skip-similar [thr]   --lossless-jpeg
+                   (--skip-similar: perceptual dupe detection via dHash 64-bit.
+                    Default threshold=5. Use 0-2=very strict, 5=default, 10=loose)
 MOTION/LIVE PHOTO: -m / --motion-only
+                   --motion-shareable         remux embedded video with faststart
+                                              (ffmpeg optional — best-effort fallback)
+                   --motion-shareable-strict  require ffmpeg, fail if missing
 PROCESSING:        --overwrite  --no-recursive  --flat  --dry-run  -v
 
 EXAMPLES:
@@ -242,12 +268,62 @@ check_dependencies() {
         command -v sha256sum &>/dev/null && HASH_CMD="sha256sum" || \
         { command -v shasum &>/dev/null && HASH_CMD="shasum -a 256" || { log_warn "sha256sum not found."; SKIP_DUPLICATES="false"; }; }
     fi
+
+    command -v ffmpeg &>/dev/null && HAS_FFMPEG="true"
+    if [[ "$MOTION_SHAREABLE_STRICT" == "true" && "$HAS_FFMPEG" != "true" ]]; then
+        log_error "ffmpeg not found — required for --motion-shareable-strict."
+        log_error "Install: pkg install ffmpeg -y (Termux) / apt install ffmpeg (Linux)"
+        exit 1
+    fi
 }
 
 get_magick_cmd() { echo "$MAGICK_CMD"; }
 get_image_width() { $IDENTIFY_CMD -format "%w" "$1" 2>/dev/null | head -1 || echo "0"; }
 get_image_dimensions() { $IDENTIFY_CMD -format "%wx%h" "$1" 2>/dev/null | head -1 || echo "0x0"; }
 get_file_hash() { $HASH_CMD "$1" 2>/dev/null | cut -d' ' -f1 || echo ""; }
+
+# Perceptual hash (dHash 64-bit): 9x8 grayscale, compare adjacent pixels per row
+# Returns 16-char hex string, or empty on failure.
+compute_dhash() {
+    local file="$1"
+    local px
+    px=$(magick "$file" -colorspace Gray -resize 9x8\! -depth 8 gray:- 2>/dev/null | od -An -tu1 -v 2>/dev/null | tr -s ' \n' ' ') || return 1
+    [[ -z "$px" ]] && return 1
+    local -a p=()
+    read -ra p <<< "$px"
+    [[ ${#p[@]} -lt 72 ]] && return 1
+    # Build hash as two 32-bit halves: bits 0..31 = rows 0-3, bits 32..63 = rows 4-7
+    local hi=0 lo=0 row col idx bit
+    for ((row=0; row<8; row++)); do
+        for ((col=0; col<8; col++)); do
+            idx=$((row*9 + col))
+            bit=0; (( p[idx] > p[idx+1] )) && bit=1
+            if (( row < 4 )); then hi=$(( (hi << 1) | bit )); else lo=$(( (lo << 1) | bit )); fi
+        done
+    done
+    printf '%08x%08x' "$hi" "$lo"
+}
+
+# Hamming distance between two 64-bit hex hashes (0..64).
+# Split into 32-bit halves to avoid bash signed-int overflow on values > 2^63-1.
+hamming_distance() {
+    local a="$1" b="$2"
+    local ah=${a:0:8} al=${a:8:8} bh=${b:0:8} bl=${b:8:8}
+    local xh=$((16#$ah ^ 16#$bh)) xl=$((16#$al ^ 16#$bl)) n=0
+    while (( xh > 0 )); do n=$((n + (xh & 1))); xh=$((xh >> 1)); done
+    while (( xl > 0 )); do n=$((n + (xl & 1))); xl=$((xl >> 1)); done
+    echo "$n"
+}
+
+# Check if hash is within threshold of any seen hash. Returns 0=similar, 1=unique.
+is_similar_phash() {
+    local h="$1" thr="$2" seen hd
+    for seen in "${SEEN_PHASHES[@]}"; do
+        hd=$(hamming_distance "$h" "$seen")
+        (( hd <= thr )) && return 0
+    done
+    return 1
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PROFILES — Named presets from photo_profiles.conf
@@ -325,10 +401,14 @@ parse_profile_args() {
             --suffix)             OUTPUT_SUFFIX="$2"; shift 2 ;;
             --min-res)            MIN_RESOLUTION="$2"; shift 2 ;;
             --skip-duplicates)    SKIP_DUPLICATES="true"; shift ;;
+            --skip-similar)       SKIP_SIMILAR="true"; if [[ -n "${2:-}" && "$2" =~ ^[0-9]+$ ]]; then SKIP_SIMILAR_THRESHOLD="$2"; shift 2; else shift; fi ;;
             --lossless-jpeg)      LOSSLESS_JPEG="true"; shift ;;
             -m|--extract-motion)  EXTRACT_MOTION="true"; shift ;;
             --motion-only)        MOTION_ONLY="true"; EXTRACT_MOTION="true"; shift ;;
+            --motion-shareable)        MOTION_SHAREABLE="true"; EXTRACT_MOTION="true"; shift ;;
+            --motion-shareable-strict) MOTION_SHAREABLE="true"; MOTION_SHAREABLE_STRICT="true"; EXTRACT_MOTION="true"; shift ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
+            --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
             --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --skip-existing)      SKIP_EXISTING="true"; shift ;;
@@ -391,6 +471,11 @@ load_profile_conf() {
                 Overwrite)        [[ "$val" == "true" ]] && OVERWRITE="true" ;;
                 Verbose)          [[ "$val" == "true" ]] && VERBOSE="true" ;;
                 Compare)          [[ "$val" == "true" ]] && COMPARE="true" ;;
+                MotionShareable)  [[ "$val" == "true" ]] && { MOTION_SHAREABLE="true"; EXTRACT_MOTION="true"; } ;;
+                MotionShareableStrict) [[ "$val" == "true" ]] && MOTION_SHAREABLE_STRICT="true" ;;
+                SkipSimilar)      [[ "$val" == "true" ]] && SKIP_SIMILAR="true" ;;
+                SkipSimilarThreshold) [[ "$val" =~ ^[0-9]+$ ]] && SKIP_SIMILAR_THRESHOLD="$val" ;;
+                DJIBurstGroup)    [[ -n "$val" ]] && DJI_BURST_GROUP="${val,,}" ;;
             esac
         fi
     done < "$conf_file"
@@ -444,6 +529,11 @@ SkipExisting=${SKIP_EXISTING}
 Overwrite=${OVERWRITE}
 Verbose=${VERBOSE}
 Compare=${COMPARE}
+MotionShareable=${MOTION_SHAREABLE}
+MotionShareableStrict=${MOTION_SHAREABLE_STRICT}
+SkipSimilar=${SKIP_SIMILAR}
+SkipSimilarThreshold=${SKIP_SIMILAR_THRESHOLD}
+DJIBurstGroup=${DJI_BURST_GROUP}
 EOF
             log_info "Profil salvat: ${prof_file}"
         fi
@@ -1013,6 +1103,56 @@ strip_dji_privacy() {
     return 0
 }
 
+# Strip DJI sensitive/telemetry data but keep useful metadata (GPS, Make/Model, exposure, altitudes)
+# Scoate: serial (EXIF + XMP + [DJI] SensorID), flight/gimbal telemetry, sensor temp, [DJI] binary debug (~65KB)
+# Pastreaza: Make, Model, ProductName, GPS, AbsoluteAltitude, RelativeAltitude, DateTime, expunere
+strip_dji_clean() {
+    local input="$1" output="$2"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { log_warn "exiftool required for DJI clean"; return 1; }
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_dry "Would clean DJI: ${input##*/}"
+        return 0
+    fi
+
+    cp "$input" "$output"
+
+    exiftool -overwrite_original \
+        -SerialNumber= \
+        -CameraSerialNumber= \
+        -XMP-drone-dji:CameraSerialNumber= \
+        -XMP-drone-dji:FlightRollDegree= \
+        -XMP-drone-dji:FlightYawDegree= \
+        -XMP-drone-dji:FlightPitchDegree= \
+        -XMP-drone-dji:FlightXSpeed= \
+        -XMP-drone-dji:FlightYSpeed= \
+        -XMP-drone-dji:FlightZSpeed= \
+        -XMP-drone-dji:GimbalRollDegree= \
+        -XMP-drone-dji:GimbalYawDegree= \
+        -XMP-drone-dji:GimbalPitchDegree= \
+        -XMP-drone-dji:CamReverse= \
+        -XMP-drone-dji:GimbalReverse= \
+        -XMP-drone-dji:SensorTemperature= \
+        -XMP-drone-dji:SurveyingMode= \
+        -XMP-drone-dji:SelfData= \
+        -XMP-drone-dji:AltitudeType= \
+        -XMP-drone-dji:WhiteBalanceCCT= \
+        -XMP-drone-dji:SelectAngle= \
+        -XMP-drone-dji:GpsStatus= \
+        -DJI:all= \
+        "$output" 2>/dev/null || true
+
+    local in_size out_size saved
+    in_size=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null)
+    out_size=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
+    saved=$((in_size - out_size))
+
+    STATS_DJI_CLEANED=$((STATS_DJI_CLEANED + 1))
+    STATS_DJI_CLEAN_SAVED=$((STATS_DJI_CLEAN_SAVED + saved))
+    echo -e "${GREEN}[DJI]${NC} Cleaned: ${input##*/} ($(format_size $in_size) → $(format_size $out_size), saved $(format_size $saved))"
+    return 0
+}
+
 # Extract DJI 4K Live Photo video
 # DJI Live Photo: JPEG with embedded MP4 (similar to Samsung Motion Photo)
 # DJI uses a similar approach — short video clip appended after JPEG data
@@ -1044,7 +1184,11 @@ extract_dji_live_photo() {
     local size_mb; size_mb=$(awk "BEGIN{printf\"%.1f\",$video_size/1048576}")
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_dry "DJI Live Photo: $bn → ${name}_dji_live.mp4 ($size_mb MB)"
+        local dry_tag="DJI Live Photo: $bn → ${name}_dji_live.mp4 ($size_mb MB)"
+        if [[ "$MOTION_SHAREABLE" == "true" ]]; then
+            [[ "$HAS_FFMPEG" == "true" ]] && dry_tag="$dry_tag [shareable via ffmpeg]" || dry_tag="$dry_tag [best-effort]"
+        fi
+        log_dry "$dry_tag"
         return 0
     fi
 
@@ -1053,6 +1197,7 @@ extract_dji_live_photo() {
     if file "$video_out" 2>/dev/null | grep -qi "mp4\|video\|iso media"; then
         STATS_DJI_LIVEPHOTO=$((STATS_DJI_LIVEPHOTO + 1))
         echo -e "${GREEN}[DJI]${NC} Live Photo: $bn → ${name}_dji_live.mp4 ($size_mb MB)"
+        make_motion_shareable "$input" "$video_out"
         return 0
     else
         rm -f "$video_out"
@@ -1160,8 +1305,16 @@ extract_iphone_live() {
     local f="$1" m="$2" od="$3"; local n="${f##*/}"; n="${n%.*}"; local o="${od}/${n}_live.mov"
     [[ -f "$o" && "$OVERWRITE" != "true" ]] && return 0
     local z; z=$(stat -c%s "$m" 2>/dev/null || stat -f%z "$m" 2>/dev/null); local mb; mb=$(awk "BEGIN{printf\"%.1f\",$z/1048576}")
-    [[ "$DRY_RUN" == "true" ]] && { log_dry "iPhone: ${f##*/} → ${n}_live.mov ($mb MB)"; return 0; }
-    cp "$m" "$o"; echo -e "${GREEN}[LIVE]${NC} iPhone: ${f##*/} → ${n}_live.mov ($mb MB)"; return 0
+    if [[ "$DRY_RUN" == "true" ]]; then
+        local dry_tag="iPhone: ${f##*/} → ${n}_live.mov ($mb MB)"
+        if [[ "$MOTION_SHAREABLE" == "true" ]]; then
+            [[ "$HAS_FFMPEG" == "true" ]] && dry_tag="$dry_tag [shareable via ffmpeg]" || dry_tag="$dry_tag [best-effort]"
+        fi
+        log_dry "$dry_tag"; return 0
+    fi
+    cp "$m" "$o"; echo -e "${GREEN}[LIVE]${NC} iPhone: ${f##*/} → ${n}_live.mov ($mb MB)"
+    make_motion_shareable "$f" "$o"
+    return 0
 }
 
 extract_embedded_motion() {
@@ -1174,9 +1327,80 @@ extract_embedded_motion() {
     [[ -z "$off" || "$off" -le 0 ]] && return 1
     local fz; fz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null); local vz=$((fz-off)); [[ $vz -lt 1000 ]] && return 1
     local mb; mb=$(awk "BEGIN{printf\"%.1f\",$vz/1048576}")
-    [[ "$DRY_RUN" == "true" ]] && { log_dry "$src: $bn → ${n}_motion.mp4 ($mb MB)"; return 0; }
+    if [[ "$DRY_RUN" == "true" ]]; then
+        local dry_tag="$src: $bn → ${n}_motion.mp4 ($mb MB)"
+        if [[ "$MOTION_SHAREABLE" == "true" ]]; then
+            [[ "$HAS_FFMPEG" == "true" ]] && dry_tag="$dry_tag [shareable via ffmpeg]" || dry_tag="$dry_tag [best-effort]"
+        fi
+        log_dry "$dry_tag"; return 0
+    fi
     dd if="$f" of="$o" bs=1 skip="$off" 2>/dev/null
-    file "$o" 2>/dev/null | grep -qi "mp4\|video\|iso media" && { echo -e "${GREEN}[MOTION]${NC} $src: $bn → ${n}_motion.mp4 ($mb MB)"; return 0; } || { rm -f "$o"; return 1; }
+    if file "$o" 2>/dev/null | grep -qi "mp4\|video\|iso media"; then
+        echo -e "${GREEN}[MOTION]${NC} $src: $bn → ${n}_motion.mp4 ($mb MB)"
+        make_motion_shareable "$f" "$o"
+        return 0
+    else
+        rm -f "$o"; return 1
+    fi
+}
+
+# ── Motion shareable helpers ────────────────────────────────────────────────
+# Check moov box position in MP4/MOV. Returns 0=moov-first, 1=mdat-first, 2=unknown.
+check_moov_position() {
+    local f="$1"
+    local sz_hex; sz_hex=$(od -An -N4 -tx1 "$f" 2>/dev/null | tr -d ' \n')
+    [[ ${#sz_hex} -ne 8 ]] && return 2
+    local sz=$((16#$sz_hex))
+    [[ $sz -lt 8 || $sz -gt 4096 ]] && return 2
+    local type; type=$(dd if="$f" bs=1 skip=$((sz+4)) count=4 2>/dev/null | tr -cd 'a-zA-Z0-9')
+    [[ "$type" == "moov" ]] && return 0
+    [[ "$type" == "mdat" ]] && return 1
+    return 2
+}
+
+# Map JPEG EXIF Orientation to video rotation degrees (ffmpeg metadata rotate tag).
+get_jpeg_rotation() {
+    local f="$1"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo "0"; return; }
+    local o; o=$(exiftool -s3 -Orientation -n "$f" 2>/dev/null | head -1)
+    case "$o" in 3) echo "180" ;; 6) echo "90" ;; 8) echo "270" ;; *) echo "0" ;; esac
+}
+
+# Wrap extracted motion video: ffmpeg faststart remux, else moov-position detect.
+# Args: parent_image_path extracted_video_path
+make_motion_shareable() {
+    local parent="$1" out="$2"
+    [[ "$MOTION_SHAREABLE" != "true" ]] && return 0
+    [[ ! -f "$out" ]] && return 1
+    [[ "$DRY_RUN" == "true" ]] && return 0
+    local bn="${out##*/}"
+    if [[ "$HAS_FFMPEG" == "true" ]]; then
+        local rot; rot=$(get_jpeg_rotation "$parent")
+        local tmp="${out}.remux.tmp"
+        local args=(-y -loglevel error -i "$out" -c copy -movflags +faststart)
+        [[ -n "$rot" && "$rot" != "0" ]] && args+=(-metadata:s:v:0 "rotate=$rot")
+        args+=("$tmp")
+        if ffmpeg "${args[@]}" 2>/dev/null && [[ -s "$tmp" ]]; then
+            mv -f "$tmp" "$out"
+            STATS_MOTION_SHAREABLE_REMUX=$((STATS_MOTION_SHAREABLE_REMUX + 1))
+            echo -e "  ${GREEN}[SHARE OK]${NC} $bn: remuxed faststart${NC}"
+        else
+            rm -f "$tmp"
+            STATS_MOTION_SHAREABLE_FAILED=$((STATS_MOTION_SHAREABLE_FAILED + 1))
+            echo -e "  ${YELLOW}[SHARE FALLBACK]${NC} $bn: ffmpeg remux failed, kept raw"
+        fi
+    else
+        check_moov_position "$out"
+        case $? in
+            0) STATS_MOTION_SHAREABLE_BEST=$((STATS_MOTION_SHAREABLE_BEST + 1))
+               echo -e "  ${GREEN}[SHARE OK]${NC} $bn: moov-at-start (shareable)" ;;
+            1) STATS_MOTION_SHAREABLE_WARN=$((STATS_MOTION_SHAREABLE_WARN + 1))
+               echo -e "  ${YELLOW}[SHARE WARN]${NC} $bn: moov-at-end (install ffmpeg for faststart)" ;;
+            *) STATS_MOTION_SHAREABLE_WARN=$((STATS_MOTION_SHAREABLE_WARN + 1))
+               echo -e "  ${GRAY}[SHARE ?]${NC} $bn: box structure unknown" ;;
+        esac
+    fi
+    return 0
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1278,6 +1502,10 @@ convert_image() {
                     ;;
                 privacy-strip)
                     strip_dji_privacy "$input" "$output"
+                    return $?
+                    ;;
+                clean)
+                    strip_dji_clean "$input" "$output"
                     return $?
                     ;;
                 *)
@@ -1463,6 +1691,56 @@ process_files() {
         [[ $dc -gt 0 ]] && log_info "Detected $dc DJI photo(s)"
     fi
 
+    # Pre-scan DJI burst groups (filename-based: DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG)
+    if [[ -n "$DJI_BURST_GROUP" ]]; then
+        declare -A burst_groups=()
+        local bg_total=0
+        for f in "${image_files[@]}"; do
+            local bf="${f##*/}"
+            if [[ "$bf" =~ ^DJI_([0-9]{14})_([0-9]{4})_D_([0-9]{3})\.(JPG|jpg)$ ]]; then
+                local gkey="${BASH_REMATCH[1]}_${BASH_REMATCH[2]}"
+                local gidx="${BASH_REMATCH[3]}"
+                burst_groups["$gkey"]="${burst_groups[$gkey]:-}${gidx}:${f}|"
+                bg_total=$((bg_total+1))
+            fi
+        done
+        local bg_count=0 bg_skip=0
+        for gk in "${!burst_groups[@]}"; do
+            local entries="${burst_groups[$gk]}"
+            local -a parts=()
+            IFS='|' read -ra parts <<< "$entries"
+            local n=0; for p in "${parts[@]}"; do [[ -n "$p" ]] && n=$((n+1)); done
+            [[ $n -lt 2 ]] && continue
+            bg_count=$((bg_count+1))
+            case "$DJI_BURST_GROUP" in
+                first)
+                    local first_idx="" first_path=""
+                    for p in "${parts[@]}"; do
+                        [[ -z "$p" ]] && continue
+                        local idx="${p%%:*}" pth="${p#*:}"
+                        if [[ -z "$first_idx" || "$idx" < "$first_idx" ]]; then first_idx="$idx"; first_path="$pth"; fi
+                    done
+                    for p in "${parts[@]}"; do
+                        [[ -z "$p" ]] && continue
+                        local pth="${p#*:}"
+                        [[ "$pth" != "$first_path" ]] && { DJI_BURST_SKIP["$pth"]=1; bg_skip=$((bg_skip+1)); }
+                    done
+                    ;;
+                skip)
+                    for p in "${parts[@]}"; do
+                        [[ -z "$p" ]] && continue
+                        local pth="${p#*:}"
+                        DJI_BURST_SKIP["$pth"]=1; bg_skip=$((bg_skip+1))
+                    done
+                    ;;
+                all) : ;;  # process all — no skip
+            esac
+        done
+        STATS_DJI_BURST_GROUPS=$bg_count
+        STATS_DJI_BURST_SKIPPED=$bg_skip
+        [[ $bg_count -gt 0 ]] && log_info "Detected $bg_count DJI burst group(s) ($bg_total photos) — mode: $DJI_BURST_GROUP, skipping $bg_skip"
+    fi
+
     # Pre-scan DNG
     if [[ "$HAS_EXIFTOOL" == "true" ]]; then
         local nc=0 njxl=0
@@ -1506,11 +1784,27 @@ process_files() {
         local ext="${bn##*.}"; ext="${ext,,}"
         FORMAT_COUNTS["$ext"]=$(( ${FORMAT_COUNTS["$ext"]:-0} + 1 ))
 
+        # Skip DJI burst secondaries
+        [[ -n "${DJI_BURST_SKIP[$file]+x}" ]] && { skipped=$((skipped+1)); continue; }
+
         # Skip duplicates
         if [[ "$SKIP_DUPLICATES" == "true" ]]; then
             local h; h=$(get_file_hash "$file")
             [[ -n "$h" && -n "${SEEN_HASHES[$h]+x}" ]] && { STATS_DUPLICATES_SKIPPED=$((STATS_DUPLICATES_SKIPPED+1)); skipped=$((skipped+1)); continue; }
             [[ -n "$h" ]] && SEEN_HASHES["$h"]="$bn"
+        fi
+
+        # Skip similar (perceptual hash — slower, detects near-duplicates)
+        if [[ "$SKIP_SIMILAR" == "true" ]]; then
+            local ph; ph=$(compute_dhash "$file")
+            if [[ -n "$ph" ]]; then
+                if is_similar_phash "$ph" "$SKIP_SIMILAR_THRESHOLD"; then
+                    STATS_SIMILAR_SKIPPED=$((STATS_SIMILAR_SKIPPED+1)); skipped=$((skipped+1))
+                    log_verbose "Skip similar: $bn (phash=$ph)"
+                    continue
+                fi
+                SEEN_PHASHES+=("$ph")
+            fi
         fi
 
         # Min resolution
@@ -1555,6 +1849,7 @@ process_files() {
         echo -e "  Converted:                ${GREEN}${converted}${NC}"
         echo -e "  Skipped:                  ${YELLOW}${skipped}${NC}"
         [[ $STATS_DUPLICATES_SKIPPED -gt 0 ]] && echo -e "    Duplicates:             ${GRAY}${STATS_DUPLICATES_SKIPPED}${NC}"
+        [[ $STATS_SIMILAR_SKIPPED -gt 0 ]]    && echo -e "    Similar (pHash):        ${GRAY}${STATS_SIMILAR_SKIPPED} (thr=$SKIP_SIMILAR_THRESHOLD)${NC}"
         [[ $STATS_MINRES_SKIPPED -gt 0 ]]    && echo -e "    Below min-res:          ${GRAY}${STATS_MINRES_SKIPPED}${NC}"
         [[ $STATS_SKIPPED_EXISTING -gt 0 ]]  && echo -e "    Already converted:      ${GRAY}${STATS_SKIPPED_EXISTING}${NC}"
         echo -e "  Failed:                   ${RED}${failed}${NC}"
@@ -1579,6 +1874,18 @@ process_files() {
         [[ $STATS_DJI_EXPORTED -gt 0 ]]   && echo -e "    Metadata exported:    ${WHITE}${STATS_DJI_EXPORTED}${NC}"
         [[ $STATS_DJI_LIVEPHOTO -gt 0 ]]  && echo -e "    Live Photo extracted: ${WHITE}${STATS_DJI_LIVEPHOTO}${NC}"
         [[ $STATS_DJI_STRIPPED -gt 0 ]]   && echo -e "    Privacy stripped:     ${WHITE}${STATS_DJI_STRIPPED}${NC}"
+        [[ $STATS_DJI_CLEANED -gt 0 ]]    && echo -e "    Cleaned:              ${WHITE}${STATS_DJI_CLEANED} (saved $(format_size $STATS_DJI_CLEAN_SAVED))${NC}"
+    fi
+    [[ $STATS_DJI_BURST_GROUPS -gt 0 ]] && echo -e "  ${GREEN}DJI burst groups:         ${WHITE}${STATS_DJI_BURST_GROUPS} (mode: ${DJI_BURST_GROUP}, skipped ${STATS_DJI_BURST_SKIPPED})${NC}"
+    if [[ "$MOTION_SHAREABLE" == "true" ]]; then
+        local total_share=$((STATS_MOTION_SHAREABLE_REMUX + STATS_MOTION_SHAREABLE_BEST + STATS_MOTION_SHAREABLE_WARN + STATS_MOTION_SHAREABLE_FAILED))
+        if [[ $total_share -gt 0 ]]; then
+            echo -e "  ${GREEN}Motion shareable:         ${WHITE}${total_share}${NC}"
+            [[ $STATS_MOTION_SHAREABLE_REMUX -gt 0 ]]  && echo -e "    ffmpeg remux OK:      ${GREEN}${STATS_MOTION_SHAREABLE_REMUX}${NC}"
+            [[ $STATS_MOTION_SHAREABLE_BEST -gt 0 ]]   && echo -e "    Best-effort OK:       ${GREEN}${STATS_MOTION_SHAREABLE_BEST}${NC}"
+            [[ $STATS_MOTION_SHAREABLE_WARN -gt 0 ]]   && echo -e "    Moov-at-end warn:     ${YELLOW}${STATS_MOTION_SHAREABLE_WARN}${NC}"
+            [[ $STATS_MOTION_SHAREABLE_FAILED -gt 0 ]] && echo -e "    Remux failed:         ${RED}${STATS_MOTION_SHAREABLE_FAILED}${NC}"
+        fi
     fi
     if [[ $STATS_DNG_DETECTED -gt 0 ]]; then
         echo -e "  ${MAGENTA}DNG files:                ${WHITE}${STATS_DNG_DETECTED}${NC}"
@@ -1636,6 +1943,7 @@ parse_args() {
             --force-hdr)          HDR_MODE="force-hdr"; shift ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
+            --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
             --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --strip-exif)         STRIP_EXIF="true"; shift ;;
             --keep-exif)          STRIP_EXIF="false"; shift ;;
@@ -1651,8 +1959,11 @@ parse_args() {
             --min-res)            MIN_RESOLUTION="$2"; shift 2 ;;
             --lossless-jpeg)      LOSSLESS_JPEG="true"; shift ;;
             --skip-duplicates)    SKIP_DUPLICATES="true"; shift ;;
+            --skip-similar)       SKIP_SIMILAR="true"; if [[ -n "${2:-}" && "$2" =~ ^[0-9]+$ ]]; then SKIP_SIMILAR_THRESHOLD="$2"; shift 2; else shift; fi ;;
             -m|--extract-motion)  EXTRACT_MOTION="true"; shift ;;
             --motion-only)        MOTION_ONLY="true"; EXTRACT_MOTION="true"; shift ;;
+            --motion-shareable)        MOTION_SHAREABLE="true"; EXTRACT_MOTION="true"; shift ;;
+            --motion-shareable-strict) MOTION_SHAREABLE="true"; MOTION_SHAREABLE_STRICT="true"; EXTRACT_MOTION="true"; shift ;;
             -j|--jobs)            PARALLEL_JOBS="$2"; shift 2 ;;
             --skip-existing)      SKIP_EXISTING="true"; shift ;;
             --profile)            PROFILE="$2"; shift 2 ;;
@@ -1680,7 +1991,8 @@ validate_args() {
     [[ -n "$QUALITY_PRESET" ]] && case "$QUALITY_PRESET" in web|social|archive|print|max|thumb) ;; *) log_error "Bad preset"; exit 1;; esac
     [[ -n "$BIT_DEPTH" ]] && case "$BIT_DEPTH" in 8|10|16) ;; *) log_error "Depth: 8/10/16"; exit 1;; esac
     [[ -n "$UHDR_ACTION" ]] && case "$UHDR_ACTION" in detect|strip|extract|decode|info) ;; *) log_error "UHDR: detect/strip/extract/decode/info"; exit 1;; esac
-    [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip) ;; *) log_error "DJI: detect/export/privacy-strip"; exit 1;; esac
+    [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip|clean) ;; *) log_error "DJI: detect/export/privacy-strip/clean"; exit 1;; esac
+    [[ -n "$DJI_BURST_GROUP" ]] && case "$DJI_BURST_GROUP" in first|all|skip) ;; *) log_error "DJI burst-group: first/all/skip"; exit 1;; esac
     [[ -n "$CROP_RATIO" && ! "$CROP_RATIO" =~ ^[0-9]+:[0-9]+$ ]] && { log_error "Crop: W:H"; exit 1; }
     mkdir -p "$OUTPUT_DIR"
 }
@@ -1754,7 +2066,7 @@ main() {
                         echo -e "  ${YELLOW}Profil anulat — continuam cu configurare manuala.${NC}"
                         # Reset to defaults (paths raman cele din Paths)
                         OUTPUT_FORMAT="avif"; QUALITY=80; QUALITY_PRESET=""; RESIZE=""; CROP_RATIO=""
-                        HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""
+                        HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""; DJI_BURST_GROUP=""
                         STRIP_EXIF="false"; SRGB_CONVERT="false"; WATERMARK_TEXT=""
                     else
                         log_info "Profil incarcat."
@@ -1773,6 +2085,32 @@ main() {
     print_header
     validate_args
     check_dependencies
+
+    # ── Motion shareable pre-batch check ────────────────────────────────
+    if [[ "$MOTION_SHAREABLE" == "true" && "$HAS_FFMPEG" != "true" && "$MOTION_SHAREABLE_STRICT" != "true" ]]; then
+        echo -e "  ${YELLOW}[!]${NC} ffmpeg not installed — faststart remux unavailable."
+        echo -e "      Motion Photos with moov-at-end will be extracted best-effort"
+        echo -e "      (video valid, but instant preview not guaranteed)."
+        echo ""
+        if [[ -t 0 && "$DRY_RUN" != "true" && "$WATCH_MODE" != "true" ]]; then
+            local ans
+            read -r -p "  Continue? [Y/n/install] " ans
+            case "${ans,,}" in
+                n|no)
+                    echo -e "  ${GRAY}Aborted. Install ffmpeg and retry.${NC}"
+                    exit 0 ;;
+                install|i)
+                    echo -e "  ${CYAN}Install commands:${NC}"
+                    echo -e "    Termux:  ${WHITE}pkg install ffmpeg -y${NC}"
+                    echo -e "    Linux:   ${WHITE}apt install ffmpeg${NC} / ${WHITE}dnf install ffmpeg${NC}"
+                    echo -e "    macOS:   ${WHITE}brew install ffmpeg${NC}"
+                    exit 0 ;;
+            esac
+        else
+            echo -e "  ${GRAY}(non-interactive mode — proceeding best-effort)${NC}"
+            echo ""
+        fi
+    fi
 
     # HEIC output support check
     check_heic_output_support
@@ -1797,6 +2135,10 @@ main() {
     [[ -n "$CROP_RATIO" ]] && echo -e "  Crop:       ${WHITE}${CROP_RATIO}${NC}"
     [[ -n "$WATERMARK_TEXT" ]] && echo -e "  Watermark:  ${WHITE}\"${WATERMARK_TEXT}\"${NC}"
     [[ "$EXTRACT_MOTION" == "true" ]] && echo -e "  Motion:     ${WHITE}Samsung + Google + iPhone + DJI${NC}"
+    if [[ "$MOTION_SHAREABLE" == "true" ]]; then
+        if [[ "$HAS_FFMPEG" == "true" ]]; then echo -e "  Shareable:  ${GREEN}ffmpeg remux (faststart)${NC}"
+        else echo -e "  Shareable:  ${YELLOW}best-effort (no ffmpeg)${NC}"; fi
+    fi
     [[ "$DRY_RUN" == "true" ]] && echo -e "  ${YELLOW}DRY RUN${NC}"
     echo ""
 

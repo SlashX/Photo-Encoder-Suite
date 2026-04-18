@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.3 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.4 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -26,7 +26,8 @@ param(
     [switch]$ForceSdr,
     [switch]$ForceHdr,
     [ValidateSet("","detect","info","strip","extract","decode")][string]$UHDR = "",
-    [ValidateSet("","detect","export","privacy-strip")][string]$DJI = "",
+    [ValidateSet("","detect","export","privacy-strip","clean")][string]$DJI = "",
+    [ValidateSet("","first","all","skip")][string]$DJIBurstGroup = "",
     [switch]$DngPreview,
     [switch]$StripExif,
     [switch]$NoAutoRotate,
@@ -40,8 +41,12 @@ param(
     [int]$MinRes = 0,
     [switch]$LosslessJpeg,
     [switch]$SkipDuplicates,
+    [switch]$SkipSimilar,
+    [int]$SkipSimilarThreshold = 5,
     [switch]$ExtractMotion,
     [switch]$MotionOnly,
+    [switch]$MotionShareable,
+    [switch]$MotionShareableStrict,
     [switch]$Overwrite,
     [switch]$NoRecursive,
     [switch]$Flat,
@@ -54,7 +59,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.3"
+$Version = "4.4"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -123,13 +128,15 @@ if ($InteractiveMode) {
                 if ($MinRes)           { $MinRes = [int]$MinRes }
                 if ($HdrMode -eq "force-sdr") { $ForceSdr = $true }
                 if ($HdrMode -eq "force-hdr") { $ForceHdr = $true }
-                foreach ($boolVar in @("StripExif","SRGB","NoAutoRotate","SkipDuplicates",
-                    "LosslessJpeg","ExtractMotion","MotionOnly","SkipExisting","Overwrite","NoRecursive","Flat","Verbose","Compare","DngPreview")) {
+                if ($SkipSimilarThreshold) { $SkipSimilarThreshold = [int]$SkipSimilarThreshold }
+                foreach ($boolVar in @("StripExif","SRGB","NoAutoRotate","SkipDuplicates","SkipSimilar",
+                    "LosslessJpeg","ExtractMotion","MotionOnly","MotionShareable","MotionShareableStrict","SkipExisting","Overwrite","NoRecursive","Flat","Verbose","Compare","DngPreview")) {
                     if ((Get-Variable -Name $boolVar -ValueOnly -ErrorAction SilentlyContinue) -eq "true") {
                         Set-Variable -Name $boolVar -Value $true -Scope Script
                     }
                 }
                 if ($MotionOnly -eq $true) { $ExtractMotion = $true }
+                if ($MotionShareable -eq $true) { $ExtractMotion = $true }
                 # Display loaded settings for confirmation
                 Write-Host "  ────────────────────────────────────" -ForegroundColor Cyan
                 Write-Host "  Format       : $Format" -ForegroundColor White
@@ -201,11 +208,18 @@ if ($Profile) {
                     "--srgb"           { $SRGB = $true }
                     "--no-auto-rotate" { $NoAutoRotate = $true }
                     "--skip-duplicates" { $SkipDuplicates = $true }
+                    "--skip-similar"   {
+                        $SkipSimilar = $true
+                        if ($i+1 -lt $tokens.Count -and $tokens[$i+1] -match '^\d+$') { $SkipSimilarThreshold = [int]$tokens[++$i] }
+                    }
                     "--lossless-jpeg"  { $LosslessJpeg = $true }
                     "-m"               { $ExtractMotion = $true }
                     "--extract-motion" { $ExtractMotion = $true }
                     "--motion-only"    { $MotionOnly = $true; $ExtractMotion = $true }
+                    "--motion-shareable"        { $MotionShareable = $true; $ExtractMotion = $true }
+                    "--motion-shareable-strict" { $MotionShareable = $true; $MotionShareableStrict = $true; $ExtractMotion = $true }
                     "--dji"            { $DJI = $tokens[++$i] }
+                    "--dji-burst-group" { $DJIBurstGroup = $tokens[++$i] }
                     "--uhdr"           { $UHDR = $tokens[++$i] }
                     "--dng-preview"    { $DngPreview = $true }
                     "--watermark-text" { $WatermarkText = $tokens[++$i] }
@@ -252,19 +266,66 @@ $MotionExtensions = @(".jpg",".jpeg",".heic",".heif")
 $HasExiftool = [bool](Get-Command "exiftool" -ErrorAction SilentlyContinue)
 $HasUhdrApp = [bool](Get-Command "ultrahdr_app" -ErrorAction SilentlyContinue)
 
+# ffmpeg lookup: prefer portable ffmpeg.exe next to script (no PATH edit, no admin),
+# fallback to system PATH for users who installed via winget/scoop/choco.
+$FfmpegPath = $null
+$LocalFfmpeg = Join-Path $ScriptDir "ffmpeg.exe"
+if (Test-Path $LocalFfmpeg -PathType Leaf) {
+    $FfmpegPath = $LocalFfmpeg
+} else {
+    $cmd = Get-Command "ffmpeg" -ErrorAction SilentlyContinue
+    if ($cmd) { $FfmpegPath = $cmd.Source }
+}
+$HasFfmpeg = [bool]$FfmpegPath
+
 if ($UHDR -eq "decode" -and -not $HasUhdrApp) {
     Write-Host "[ERROR] ultrahdr_app not found. Required for --uhdr decode." -ForegroundColor Red
     Write-Host "[ERROR] Build from: https://github.com/google/libultrahdr" -ForegroundColor Red
     exit 1
 }
 
-$Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; MinResSkip=0; Lossless=0
+if ($MotionShareableStrict -and -not $HasFfmpeg) {
+    Write-Host "[ERROR] ffmpeg not found — required for -MotionShareableStrict." -ForegroundColor Red
+    Write-Host "        Portable: drop ffmpeg.exe next to photo_encoder.ps1" -ForegroundColor Red
+    Write-Host "        Or install: winget install Gyan.FFmpeg" -ForegroundColor Red
+    exit 1
+}
+
+if ($MotionShareable -and -not $HasFfmpeg -and -not $MotionShareableStrict) {
+    Write-Host "  [!] ffmpeg not installed — faststart remux unavailable." -ForegroundColor Yellow
+    Write-Host "      Motion Photos with moov-at-end will be extracted best-effort" -ForegroundColor Yellow
+    Write-Host "      (video valid, but instant preview not guaranteed)." -ForegroundColor Yellow
+    Write-Host ""
+    $isInteractive = [Environment]::UserInteractive -and -not $DryRun -and -not $Watch
+    if ($isInteractive) {
+        $ans = Read-Host "  Continue? [Y/n/install]"
+        switch -Regex ($ans.ToLower()) {
+            "^n" { Write-Host "  Aborted. Install ffmpeg and retry." -ForegroundColor Gray; exit 0 }
+            "^i" {
+                Write-Host "  Install options:" -ForegroundColor Cyan
+                Write-Host "    Portable: download static build from https://www.gyan.dev/ffmpeg/builds/" -ForegroundColor White
+                Write-Host "              then drop ffmpeg.exe next to photo_encoder.ps1 ($ScriptDir)" -ForegroundColor White
+                Write-Host "    System:   winget install Gyan.FFmpeg" -ForegroundColor White
+                Write-Host "              choco install ffmpeg" -ForegroundColor White
+                Write-Host "              scoop install ffmpeg" -ForegroundColor White
+                exit 0
+            }
+        }
+    } else {
+        Write-Host "  (non-interactive mode — proceeding best-effort)" -ForegroundColor Gray
+        Write-Host ""
+    }
+}
+
+$Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; SimilarSkip=0; MinResSkip=0; Lossless=0
             HdrDet=0; HdrTM=0; HdrPR=0; UhdrDet=0; UhdrStrip=0; UhdrExtract=0; UhdrDecode=0
-            DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; SkipExist=0
-            DngDet=0; DngJxl=0; DngFailed=0; DngPreview=0 }
+            DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; DjiClean=0; DjiCleanSaved=[long]0; DjiBurstGroups=0; DjiBurstSkipped=0; SkipExist=0
+            DngDet=0; DngJxl=0; DngFailed=0; DngPreview=0
+            MotionShareRemux=0; MotionShareBest=0; MotionShareWarn=0; MotionShareFailed=0 }
 $FormatCounts = @{}
 $CompressionLog = [System.Collections.ArrayList]::new()
 $SeenHashes = @{}; $StartTime = Get-Date
+$SeenPhashes = [System.Collections.Generic.List[uint64]]::new()
 $script:DjiCache = @{}; $script:UhdrCache = @{}
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -276,6 +337,41 @@ function Get-PresetQ($p,$f) {
 $EffQ = if ($Preset) { Get-PresetQ $Preset $Format } else { $Quality }
 
 function Fmt-Size([long]$B) { if($B -ge 1MB){"$([math]::Round($B/1MB,1)) MB"}elseif($B -ge 1KB){"$([math]::Round($B/1KB)) KB"}else{"$B B"} }
+
+# Perceptual hash (dHash 64-bit): 9x8 grayscale, compare adjacent pixels.
+# Returns [uint64] or $null on failure. Uses temp file to preserve binary bytes.
+function Compute-DHash([string]$Path) {
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+        & magick $Path -colorspace Gray -resize "9x8!" -depth 8 "gray:$tmp" 2>$null | Out-Null
+        if (-not (Test-Path $tmp)) { return $null }
+        $bytes = [IO.File]::ReadAllBytes($tmp)
+        if ($bytes.Count -lt 72) { return $null }
+        [uint64]$hash = 0
+        for ($row=0; $row -lt 8; $row++) {
+            for ($col=0; $col -lt 8; $col++) {
+                $idx = $row * 9 + $col
+                $hash = $hash -shl 1
+                if ($bytes[$idx] -gt $bytes[$idx+1]) { $hash = $hash -bor 1 }
+            }
+        }
+        return $hash
+    } catch { return $null }
+    finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+function Hamming-Distance([uint64]$a, [uint64]$b) {
+    $x = $a -bxor $b; $n = 0
+    while ($x -gt 0) { $n += [int]($x -band 1); $x = $x -shr 1 }
+    return $n
+}
+
+function Is-SimilarPHash([uint64]$h, [int]$Threshold) {
+    foreach ($seen in $script:SeenPhashes) {
+        if ((Hamming-Distance $h $seen) -le $Threshold) { return $true }
+    }
+    return $false
+}
 function Fmt-Dur([TimeSpan]$D) { if($D.TotalHours -ge 1){"$([int]$D.TotalHours)h $($D.Minutes)m"}elseif($D.TotalMinutes -ge 1){"$([int]$D.TotalMinutes)m $($D.Seconds)s"}else{"$([int]$D.TotalSeconds)s"} }
 function Parse-SizeB([string]$S) { if($S -match '^([\d.]+)\s*(k|kb|m|mb)?$'){$n=[double]$Matches[1]; switch($Matches[2]){{$_ -in "k","kb"}{[long]($n*1KB)}{$_ -in "m","mb"}{[long]($n*1MB)}default{[long]$n}}}else{0} }
 
@@ -315,7 +411,12 @@ if ($Format -eq "jxl") {
 
 Write-Host "  Format: $($Format.ToUpper()) | $(if($Preset){"Preset: $Preset (q$EffQ)"}else{"Quality: $Quality"}) | HDR: $HdrMode" -ForegroundColor White
 if ($UHDR) { Write-Host "  Ultra HDR: $UHDR" -ForegroundColor Blue } else { Write-Host "  Ultra HDR: auto-detect" -ForegroundColor White }
-Write-Host "  libultrahdr: $(if($HasUhdrApp){'available'}else{'not installed'}) | exiftool: $(if($HasExiftool){'available'}else{'not installed'})" -ForegroundColor Gray
+$FfmpegLabel = if ($HasFfmpeg) { if ($FfmpegPath -eq $LocalFfmpeg) { "available (portable)" } else { "available (system)" } } else { "not installed" }
+Write-Host "  libultrahdr: $(if($HasUhdrApp){'available'}else{'not installed'}) | exiftool: $(if($HasExiftool){'available'}else{'not installed'}) | ffmpeg: $FfmpegLabel" -ForegroundColor Gray
+if ($MotionShareable) {
+    if ($HasFfmpeg) { Write-Host "  Shareable: ffmpeg remux (faststart)" -ForegroundColor Green }
+    else { Write-Host "  Shareable: best-effort (no ffmpeg)" -ForegroundColor Yellow }
+}
 Write-Host "  Input: $InputDir -> Output: $OutputDir" -ForegroundColor White
 if ($Watch) { Write-Host "  Watch: every ${WatchInterval}s" -ForegroundColor White }
 Write-Host ""
@@ -502,6 +603,29 @@ function Strip-DJIPrivacy([string]$In, [string]$Out) {
     return $true
 }
 
+function Strip-DJIClean([string]$In, [string]$Out) {
+    if (-not $HasExiftool) { Write-Host "[WARN] exiftool required" -ForegroundColor Yellow; return $false }
+    if ($DryRun) { Write-Host "[DRY] DJI clean: $([IO.Path]::GetFileName($In))" -ForegroundColor Cyan; return $true }
+    Copy-Item $In $Out -Force
+    & exiftool -overwrite_original `
+        "-SerialNumber=" "-CameraSerialNumber=" `
+        "-XMP-drone-dji:CameraSerialNumber=" `
+        "-XMP-drone-dji:FlightRollDegree=" "-XMP-drone-dji:FlightYawDegree=" "-XMP-drone-dji:FlightPitchDegree=" `
+        "-XMP-drone-dji:FlightXSpeed=" "-XMP-drone-dji:FlightYSpeed=" "-XMP-drone-dji:FlightZSpeed=" `
+        "-XMP-drone-dji:GimbalRollDegree=" "-XMP-drone-dji:GimbalYawDegree=" "-XMP-drone-dji:GimbalPitchDegree=" `
+        "-XMP-drone-dji:CamReverse=" "-XMP-drone-dji:GimbalReverse=" `
+        "-XMP-drone-dji:SensorTemperature=" "-XMP-drone-dji:SurveyingMode=" "-XMP-drone-dji:SelfData=" `
+        "-XMP-drone-dji:AltitudeType=" "-XMP-drone-dji:WhiteBalanceCCT=" "-XMP-drone-dji:SelectAngle=" `
+        "-XMP-drone-dji:GpsStatus=" `
+        "-DJI:all=" `
+        "$Out" 2>$null | Out-Null
+    $inSz = (Get-Item $In).Length; $outSz = (Get-Item $Out).Length; $saved = $inSz - $outSz
+    $Stats.DjiClean++
+    $Stats.DjiCleanSaved += $saved
+    Write-Host "[DJI] Cleaned: $([IO.Path]::GetFileName($In)) ($(Fmt-Size $inSz) -> $(Fmt-Size $outSz), saved $(Fmt-Size $saved))" -ForegroundColor Green
+    return $true
+}
+
 function Extract-DJILivePhoto([string]$In, [string]$OutDir) {
     $name = [IO.Path]::GetFileNameWithoutExtension($In)
     $vidOut = Join-Path $OutDir "${name}_dji_live.mp4"
@@ -517,7 +641,12 @@ function Extract-DJILivePhoto([string]$In, [string]$OutDir) {
     if ($offset -le 0) { return $false }
     $vidSize = $bytes.Length - $offset
     if ($vidSize -lt 5000) { return $false }
-    if ($DryRun) { Write-Host "[DRY] DJI Live Photo: $([IO.Path]::GetFileName($In))" -ForegroundColor Cyan; return $true }
+    if ($DryRun) {
+        $tag = "[DRY] DJI Live Photo: $([IO.Path]::GetFileName($In))"
+        if ($MotionShareable) { $tag += if ($HasFfmpeg) { " [shareable via ffmpeg]" } else { " [best-effort]" } }
+        Write-Host $tag -ForegroundColor Cyan
+        return $true
+    }
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $vid = New-Object byte[] $vidSize
     [Array]::Copy($bytes, $offset, $vid, 0, $vidSize)
@@ -525,6 +654,7 @@ function Extract-DJILivePhoto([string]$In, [string]$OutDir) {
     $Stats.DjiLive++
     $mb = [math]::Round($vidSize/1MB, 1)
     Write-Host "[DJI] Live Photo: $([IO.Path]::GetFileName($In)) -> ${name}_dji_live.mp4 ($mb MB)" -ForegroundColor Green
+    Make-MotionShareable $In $vidOut
     return $true
 }
 
@@ -607,9 +737,15 @@ function Find-LiveMOV([string]$P) {
 function Do-ExtractLive([string]$Ph,[string]$Mv,[string]$Od) {
     $n=[IO.Path]::GetFileNameWithoutExtension($Ph);$o=Join-Path $Od "${n}_live.mov"
     if((Test-Path $o)-and -not $Overwrite){return $false}
-    if($DryRun){Write-Host "[DRY] iPhone: $([IO.Path]::GetFileName($Ph))" -ForegroundColor Cyan;return $true}
+    if($DryRun){
+        $tag = "[DRY] iPhone: $([IO.Path]::GetFileName($Ph))"
+        if ($MotionShareable) { $tag += if ($HasFfmpeg) { " [shareable via ffmpeg]" } else { " [best-effort]" } }
+        Write-Host $tag -ForegroundColor Cyan; return $true
+    }
     New-Item -ItemType Directory -Force -Path $Od|Out-Null;Copy-Item $Mv $o -Force
-    Write-Host "[LIVE] iPhone: $([IO.Path]::GetFileName($Ph)) -> ${n}_live.mov" -ForegroundColor Green;return $true
+    Write-Host "[LIVE] iPhone: $([IO.Path]::GetFileName($Ph)) -> ${n}_live.mov" -ForegroundColor Green
+    Make-MotionShareable $Ph $o
+    return $true
 }
 function Do-ExtractEmbedded([string]$Fp,[string]$Od) {
     $n=[IO.Path]::GetFileNameWithoutExtension($Fp);$o=Join-Path $Od "${n}_motion.mp4"
@@ -619,10 +755,79 @@ function Do-ExtractEmbedded([string]$Fp,[string]$Od) {
     for($i=0;$i -lt($b.Length-$sm.Length);$i++){$m=$true;for($j=0;$j -lt $sm.Length;$j++){if($b[$i+$j]-ne$sm[$j]){$m=$false;break}};if($m){$off=$i+$sm.Length;$src="Samsung";break}}
     if($off -lt 0){for($i=100;$i -lt($b.Length-4);$i++){if($b[$i]-eq$ft[0]-and$b[$i+1]-eq$ft[1]-and$b[$i+2]-eq$ft[2]-and$b[$i+3]-eq$ft[3]){$off=$i-4;$src="Google";break}}}
     if($off -le 0){return $false};$vs=$b.Length-$off;if($vs -lt 1000){return $false}
-    if($DryRun){Write-Host "[DRY] $src: $([IO.Path]::GetFileName($Fp))" -ForegroundColor Cyan;return $true}
+    if($DryRun){
+        $tag = "[DRY] ${src}: $([IO.Path]::GetFileName($Fp))"
+        if ($MotionShareable) { $tag += if ($HasFfmpeg) { " [shareable via ffmpeg]" } else { " [best-effort]" } }
+        Write-Host $tag -ForegroundColor Cyan; return $true
+    }
     New-Item -ItemType Directory -Force -Path $Od|Out-Null
     $v=New-Object byte[] $vs;[Array]::Copy($b,$off,$v,0,$vs);[IO.File]::WriteAllBytes($o,$v)
-    Write-Host "[MOTION] $src: $([IO.Path]::GetFileName($Fp)) -> ${n}_motion.mp4" -ForegroundColor Green;return $true
+    Write-Host "[MOTION] ${src}: $([IO.Path]::GetFileName($Fp)) -> ${n}_motion.mp4" -ForegroundColor Green
+    Make-MotionShareable $Fp $o
+    return $true
+}
+
+# Check moov box position. Returns 0=moov-first, 1=mdat-first, 2=unknown.
+function Get-MoovPosition([string]$Path) {
+    try {
+        $fs = [IO.File]::OpenRead($Path)
+        try {
+            $header = New-Object byte[] 8
+            if ($fs.Read($header, 0, 8) -ne 8) { return 2 }
+            $sz = [BitConverter]::ToUInt32(@($header[3],$header[2],$header[1],$header[0]), 0)
+            if ($sz -lt 8 -or $sz -gt 4096) { return 2 }
+            $fs.Seek($sz + 4, [IO.SeekOrigin]::Begin) | Out-Null
+            $typeBuf = New-Object byte[] 4
+            if ($fs.Read($typeBuf, 0, 4) -ne 4) { return 2 }
+            $type = [Text.Encoding]::ASCII.GetString($typeBuf)
+            if ($type -eq "moov") { return 0 }
+            if ($type -eq "mdat") { return 1 }
+            return 2
+        } finally { $fs.Close() }
+    } catch { return 2 }
+}
+
+function Get-JpegRotation([string]$Path) {
+    if (-not $HasExiftool) { return "0" }
+    $o = & exiftool -s3 -Orientation -n "$Path" 2>$null | Select-Object -First 1
+    switch ("$o".Trim()) {
+        "3" { "180" }; "6" { "90" }; "8" { "270" }; default { "0" }
+    }
+}
+
+function Make-MotionShareable([string]$Parent, [string]$Out) {
+    if (-not $MotionShareable) { return }
+    if (-not (Test-Path $Out)) { return }
+    if ($DryRun) { return }
+    $bn = [IO.Path]::GetFileName($Out)
+    if ($HasFfmpeg) {
+        $rot = Get-JpegRotation $Parent
+        $tmp = "$Out.remux.tmp"
+        $args = @("-y","-loglevel","error","-i",$Out,"-c","copy","-movflags","+faststart")
+        if ($rot -ne "0") { $args += @("-metadata:s:v:0","rotate=$rot") }
+        $args += $tmp
+        try {
+            & $FfmpegPath @args 2>$null | Out-Null
+            if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 0)) {
+                Move-Item -Force $tmp $Out
+                $script:Stats.MotionShareRemux++
+                Write-Host "  [SHARE OK] ${bn}: remuxed faststart" -ForegroundColor Green
+                return
+            }
+        } catch {}
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+        $script:Stats.MotionShareFailed++
+        Write-Host "  [SHARE FALLBACK] ${bn}: ffmpeg remux failed, kept raw" -ForegroundColor Yellow
+    } else {
+        switch (Get-MoovPosition $Out) {
+            0 { $script:Stats.MotionShareBest++
+                Write-Host "  [SHARE OK] ${bn}: moov-at-start (shareable)" -ForegroundColor Green }
+            1 { $script:Stats.MotionShareWarn++
+                Write-Host "  [SHARE WARN] ${bn}: moov-at-end (install ffmpeg for faststart)" -ForegroundColor Yellow }
+            default { $script:Stats.MotionShareWarn++
+                Write-Host "  [SHARE ?] ${bn}: box structure unknown" -ForegroundColor Gray }
+        }
+    }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -734,6 +939,39 @@ if ($HasExiftool) {
         else{Write-Host "[INFO] Detected $nc DNG file(s)" -ForegroundColor Magenta}
     }
 }
+
+# Pre-scan DJI burst groups (filename-based: DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG)
+$DjiBurstSkip = @{}
+if ($DJIBurstGroup) {
+    $groups = @{}; $bgTotal = 0
+    foreach($F in $Files){
+        if($F.Name -match '^DJI_(\d{14})_(\d{4})_D_(\d{3})\.(JPG|jpg)$'){
+            $gkey = "$($Matches[1])_$($Matches[2])"
+            if(-not $groups.ContainsKey($gkey)){ $groups[$gkey] = @() }
+            $groups[$gkey] += [pscustomobject]@{ Idx=$Matches[3]; Path=$F.FullName }
+            $bgTotal++
+        }
+    }
+    $bgCount = 0; $bgSkip = 0
+    foreach($gk in $groups.Keys){
+        $entries = $groups[$gk]
+        if($entries.Count -lt 2){ continue }
+        $bgCount++
+        switch ($DJIBurstGroup) {
+            "first" {
+                $sorted = $entries | Sort-Object Idx
+                for($i=1; $i -lt $sorted.Count; $i++){ $DjiBurstSkip[$sorted[$i].Path] = $true; $bgSkip++ }
+            }
+            "skip" {
+                foreach($e in $entries){ $DjiBurstSkip[$e.Path] = $true; $bgSkip++ }
+            }
+            "all" { }
+        }
+    }
+    $Stats.DjiBurstGroups = $bgCount
+    $Stats.DjiBurstSkipped = $bgSkip
+    if($bgCount -gt 0){ Write-Host "[INFO] Detected $bgCount DJI burst group(s) ($bgTotal photos) - mode: $DJIBurstGroup, skipping $bgSkip" -ForegroundColor Green }
+}
 Write-Host ""
 
 # ── Auto-preset suggestion ─────────────────────────────────────────────────
@@ -786,8 +1024,23 @@ foreach($F in $Files){
     $fext = $F.Extension.TrimStart(".").ToUpper()
     if ($FormatCounts.ContainsKey($fext)) { $FormatCounts[$fext]++ } else { $FormatCounts[$fext] = 1 }
 
+    # Skip DJI burst secondaries
+    if ($DjiBurstSkip.ContainsKey($F.FullName)) { $Skip++; continue }
+
     # Skip duplicates
     if($SkipDuplicates){$h=(Get-FileHash $F.FullName -Algorithm SHA256).Hash;if($SeenHashes.ContainsKey($h)){$Stats.Dupes++;$Skip++;continue};$SeenHashes[$h]=$F.Name}
+    # Skip similar (perceptual hash)
+    if($SkipSimilar){
+        $ph = Compute-DHash $F.FullName
+        if($null -ne $ph){
+            if(Is-SimilarPHash $ph $SkipSimilarThreshold){
+                $Stats.SimilarSkip++; $Skip++
+                if($Verbose){ Write-Host "[VERB] Skip similar: $($F.Name) (phash=$($ph.ToString('x16')))" -ForegroundColor Gray }
+                continue
+            }
+            [void]$SeenPhashes.Add($ph)
+        }
+    }
     # Min resolution
     if($MinRes -gt 0){try{$w=& magick identify -format "%w" $F.FullName 2>$null|Select-Object -First 1;if([int]$w -lt $MinRes){$Stats.MinResSkip++;$Skip++;continue}}catch{}}
 
@@ -844,6 +1097,12 @@ foreach($F in $Files){
                 $od2=if($Flat -or -not $rd2){$OutputDir}else{Join-Path $OutputDir $rd2}
                 $of2=Join-Path $od2 "$($Prefix)$([IO.Path]::GetFileNameWithoutExtension($F.Name))$($Suffix).$OutExt"
                 if(Strip-DJIPrivacy $F.FullName $of2){$Conv++}; continue
+            }
+            "clean" {
+                $rd2=$F.DirectoryName.Replace($InputDir,"").TrimStart("\")
+                $od2=if($Flat -or -not $rd2){$OutputDir}else{Join-Path $OutputDir $rd2}
+                $of2=Join-Path $od2 "$($Prefix)$([IO.Path]::GetFileNameWithoutExtension($F.Name))$($Suffix).$OutExt"
+                if(Strip-DJIClean $F.FullName $of2){$Conv++}; continue
             }
         }
         # DJI Live Photo extraction (when -m is enabled)
@@ -1016,6 +1275,11 @@ if ($InteractiveMode -and -not $DryRun) {
                 "Overwrite=$($Overwrite.ToString().ToLower())"
                 "Verbose=$($Verbose.ToString().ToLower())"
                 "Compare=$($Compare.ToString().ToLower())"
+                "MotionShareable=$($MotionShareable.ToString().ToLower())"
+                "MotionShareableStrict=$($MotionShareableStrict.ToString().ToLower())"
+                "SkipSimilar=$($SkipSimilar.ToString().ToLower())"
+                "SkipSimilarThreshold=$SkipSimilarThreshold"
+                "DJIBurstGroup=$DJIBurstGroup"
             ) | Out-File $saveFile -Encoding utf8
             Write-Host "  Saved: $saveFile" -ForegroundColor Green
         }
@@ -1032,6 +1296,7 @@ Write-Host "  Summary" -ForegroundColor White
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host "  Total: $Total | Converted: $Conv | Skipped: $Skip | Failed: $Fail"
 if($Stats.Dupes -gt 0){Write-Host "    Duplicates: $($Stats.Dupes)" -ForegroundColor Gray}
+if($Stats.SimilarSkip -gt 0){Write-Host "    Similar (pHash): $($Stats.SimilarSkip) (thr=$SkipSimilarThreshold)" -ForegroundColor Gray}
 if($Stats.MinResSkip -gt 0){Write-Host "    Below min-res: $($Stats.MinResSkip)" -ForegroundColor Gray}
 if($Stats.SkipExist -gt 0){Write-Host "    Already converted: $($Stats.SkipExist)" -ForegroundColor Gray}
 if($Stats.Lossless -gt 0){Write-Host "  Lossless optimized: $($Stats.Lossless)" -ForegroundColor Green}
@@ -1048,6 +1313,18 @@ if($Stats.DjiDet -gt 0){
     if($Stats.DjiExport -gt 0){Write-Host "    Exported: $($Stats.DjiExport)"}
     if($Stats.DjiLive -gt 0){Write-Host "    Live Photo: $($Stats.DjiLive)"}
     if($Stats.DjiStrip -gt 0){Write-Host "    Privacy stripped: $($Stats.DjiStrip)"}
+    if($Stats.DjiClean -gt 0){Write-Host "    Cleaned: $($Stats.DjiClean) (saved $(Fmt-Size $Stats.DjiCleanSaved))"}
+}
+if($Stats.DjiBurstGroups -gt 0){Write-Host "  DJI burst groups: $($Stats.DjiBurstGroups) (mode: $DJIBurstGroup, skipped $($Stats.DjiBurstSkipped))" -ForegroundColor Green}
+if ($MotionShareable) {
+    $totalShare = $Stats.MotionShareRemux + $Stats.MotionShareBest + $Stats.MotionShareWarn + $Stats.MotionShareFailed
+    if ($totalShare -gt 0) {
+        Write-Host "  Motion shareable: $totalShare" -ForegroundColor Green
+        if ($Stats.MotionShareRemux -gt 0)  { Write-Host "    ffmpeg remux OK: $($Stats.MotionShareRemux)" -ForegroundColor Green }
+        if ($Stats.MotionShareBest -gt 0)   { Write-Host "    Best-effort OK: $($Stats.MotionShareBest)" -ForegroundColor Green }
+        if ($Stats.MotionShareWarn -gt 0)   { Write-Host "    Moov-at-end warn: $($Stats.MotionShareWarn)" -ForegroundColor Yellow }
+        if ($Stats.MotionShareFailed -gt 0) { Write-Host "    Remux failed: $($Stats.MotionShareFailed)" -ForegroundColor Red }
+    }
 }
 if($Stats.DngDet -gt 0){
     Write-Host "  DNG files: $($Stats.DngDet)" -ForegroundColor Magenta

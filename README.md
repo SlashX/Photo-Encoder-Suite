@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction, 24 presets and profile system — v4.3
+> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction + shareable remux, 27 presets and profile system — v4.4
 
 ---
 
@@ -11,10 +11,12 @@
 - **6 output formats**: AVIF, WEBP, JPEG, HEIC, PNG, JPEG XL (.jxl)
 - **8 input formats**: HEIC, JPEG, PNG, WEBP, TIFF, RAW/DNG, JXL, AVIF
 - **Motion Photo support**: Samsung, Google, iPhone Live Photo, DJI 4K Live Photo extraction
+- **Motion Shareable** (`--motion-shareable`): ffmpeg faststart remux + orientation inject for instant preview (WhatsApp, browsers); best-effort moov-position detection when ffmpeg unavailable
 - **Ultra HDR (UHDR)**: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR — detect, info, strip, extract, decode
 - **HDR processing**: auto tone mapping HDR→SDR, force HDR/SDR, bit depth control (8/10/16-bit)
-- **DJI Photo**: detection, 24-field CSV metadata export, GPS/gimbal/flight data, privacy strip
-- **24 predefined profiles**: instagram, facebook, whatsapp, web-gallery, archive, dji-web, print-a4, max-avif and more
+- **DJI Photo**: detection, 24-field CSV metadata export, GPS/gimbal/flight data, privacy strip, clean mode (strip telemetry + binary debug), burst-group handling (Action cameras)
+- **Perceptual duplicates**: `--skip-similar` during conversion + `--find-duplicates` in photo_check (dHash 64-bit, Hamming distance)
+- **27 predefined profiles**: instagram, facebook, whatsapp, web-gallery, archive, dji-web, dji-clean, print-a4, max-avif, motion-share and more
 - **6 quality presets**: web, social, archive, print, max (transparent quality), thumb (thumbnails)
 - **Profile system**: save/load full config as `.conf` files (cross-platform KEY=VALUE)
 - **Auto-preset suggestion**: detects input resolution, recommends optimal preset
@@ -22,7 +24,7 @@
 - **Dry-run mode**: preview batch without converting
 - **Watch mode**: auto-convert new photos in input folder
 - **Watermark**: text and image watermark support
-- **Media analysis**: `photo_check` with 50-field CSV export (EXIF, HDR, UHDR, DJI, GPS, Motion Photo)
+- **Media analysis**: `photo_check` with 54-field CSV export (EXIF, HDR, UHDR, DJI, GPS, Motion Photo, DNG, duplicates)
 - **Batch features**: skip existing, resume interrupted batch, skip duplicates (SHA256), compression report, format distribution
 
 ---
@@ -43,11 +45,11 @@ Photo-Encoder-Suite/
 ├── src/
 │   ├── photo_launcher.sh           # Interactive menu — 10 options (Termux)
 │   ├── photo_encoder.sh            # Main conversion engine (Termux)
-│   ├── photo_check.sh              # Media analysis + 50-field CSV (Termux)
+│   ├── photo_check.sh              # Media analysis + 54-field CSV (Termux)
 │   ├── photo_encoder.ps1           # Main conversion engine (Windows)
-│   ├── photo_check.ps1             # Media analysis + 50-field CSV (Windows)
+│   ├── photo_check.ps1             # Media analysis + 54-field CSV (Windows)
 │   ├── profiles/
-│   │   └── photo_profiles.conf         # 22 predefined profiles
+│   │   └── photo_profiles.conf         # 27 predefined profiles
 │   └── tools/
 │       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
 │       └── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
@@ -77,6 +79,7 @@ pkg install libjpeg-turbo -y                     # optional (lossless JPEG)
 - **ImageMagick 7.x** — download from [imagemagick.org](https://imagemagick.org/script/download.php)
 - **PowerShell 5.1+** (included in Windows 10/11)
 - **ExifTool** *(optional)* — download from [exiftool.org](https://exiftool.org)
+- **ffmpeg** *(optional, for `--motion-shareable` faststart remux)* — portable: drop `ffmpeg.exe` next to `photo_encoder.ps1` (get it from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) static builds, no PATH edit needed). System-wide: `winget install Gyan.FFmpeg`
 - **jpegtran/mozjpeg** *(optional)* — lossless JPEG optimization
 
 ---
@@ -141,9 +144,9 @@ cd src
 
 ## Predefined Profiles
 
-24 profiles available in `profiles/photo_profiles.conf`:
+27 profiles available in `profiles/photo_profiles.conf`:
 
-`instagram` · `facebook` · `twitter` · `whatsapp` · `stories` · `web-gallery` · `web-thumb` · `web-4k` · `archive` · `archive-full` · `archive-hdr` · `print-a4` · `print-poster` · `max-avif` · `max-jpeg` · `dji-web` · `dji-clean` · `dji-archive` · `coca-web` · `coca-social` · `coca-portfolio` · `quick-small` · `quick-medium` · `quick-large`
+`instagram` · `facebook` · `twitter` · `whatsapp` · `stories` · `web-gallery` · `web-thumb` · `web-4k` · `archive` · `archive-full` · `archive-hdr` · `print-a4` · `print-poster` · `max-avif` · `max-jpeg` · `dji-web` · `dji-clean` · `dji-privacy` · `dji-archive` · `coca-web` · `coca-social` · `coca-portfolio` · `quick-small` · `quick-medium` · `quick-large` · `motion-share` · `motion-share-only`
 
 ```bash
 # Use a profile (Termux)
@@ -171,7 +174,9 @@ cd src
 - Auto-detection: Make:DJI, XMP-drone-dji, Osmo/Action/Mavic models
 - **24-field CSV export**: GPS coordinates, speed, gimbal angles, flight data, serial number, firmware
 - **4K Live Photo extraction**: embedded video from JPEG
-- **Privacy strip**: removes serial number, GPS, XMP-drone-dji, Make, Model
+- **Clean mode** (`--dji clean`): strips serial number (3 EXIF locations) + XMP-drone-dji telemetry + binary debug (~65KB per photo on Action 6), keeps GPS and camera data — for private sharing
+- **Privacy strip** (`--dji privacy-strip`): nuclear — removes serial, GPS, XMP-drone-dji, Make, Model — for public sharing
+- **Burst-group handling** (`--dji-burst-group first|all|skip`): filename-based detection (`DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG`) for Action cameras
 
 ---
 
@@ -227,4 +232,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.3** — 10 files | 24 predefined profiles | bash/PS1 cross-platform
+Current: **v4.4** — 10 files | 27 predefined profiles | bash/PS1 cross-platform

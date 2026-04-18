@@ -3,44 +3,52 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.4 — Motion shareable + DJI clean + burst-group + perceptual duplicates
+───────────────────────────────────────────────────────────────
+  ADD --motion-shareable / --motion-shareable-strict: remux embedded video
+    (Samsung/Google/iPhone/DJI) cu ffmpeg -movflags +faststart + orientation
+    inject din EXIF (3→180, 6→90, 8→270) — preview instant in WhatsApp/browsers
+  ADD fallback zero-dependency cand ffmpeg lipseste: detectie moov-position
+    via box structure (od/BinaryReader), log [SHARE OK] / [SHARE WARN]
+  ADD pre-batch prompt interactiv cand ffmpeg lipseste: [Y]/[n]/[i]install
+    (auto-proceed best-effort in non-TTY/watch/dry-run)
+  ADD PS1 portable ffmpeg.exe — lookup $ScriptDir intai, PATH fallback
+    (drop langa photo_encoder.ps1, no PATH edit)
+  ADD profile — motion-share, motion-share-only (27 profile total)
+  ADD launcher optiunea 4 — sub-meniu 4 variante (extract/only + shareable)
+  ADD --dji clean — strip Serial Number (3 locatii EXIF) + XMP-drone-dji
+    + binary debug (-DJI:all=), pastreaza GPS/camera pentru share privat
+  ADD --dji-burst-group <first|all|skip> — detectie filename-based pentru
+    DJI Action cameras (regex DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG)
+  ADD --skip-similar [threshold] — dHash 64-bit perceptual hashing via
+    ImageMagick 9x8 grayscale + Hamming distance (default 5)
+  ADD photo_check --find-duplicates [threshold] — raport photo_duplicates.txt
+  ADD profiles dji-clean + dji-privacy (separate pentru cele 2 niveluri)
+  ADD stats Motion shareable in summary (remux/best-effort/warn/failed)
+  SYNC SH+PS1 paritate completa — toate flag-urile, threshold-uri,
+    output format identic; helperi check_moov_position/Get-MoovPosition,
+    get_jpeg_rotation/Get-JpegRotation, make_motion_shareable/Make-MotionShareable
+  FIX photo_encoder.sh compute_dhash — overflow signed 64-bit rezolvat
+    prin split hi/lo 32-bit (%08x%08x)
+  FIX photo_encoder.ps1 Compute-DHash — pipe gray:- corupea byte-urile,
+    rezolvat prin temp file + [IO.File]::ReadAllBytes
+
+
   v4.3 — Watch mode PS1 + bulk exiftool perf + DNG preview fix + caching
 ───────────────────────────────────────────────────────────────
-  FIX photo_encoder.sh — bug: cand DNG preview este extras, log-ul de
-    conversie afisa numele fisierului temporar /tmp/dng_preview_*.jpg
-    in loc de DNG-ul original; introdus $orig_input preservat inainte
-    de reassignment; aliniat la toate call-urile (HDR log, lossless
-    dry-run, dry-run standard, OK block, failed log)
-  FIX photo_encoder.ps1 — acelasi bug DNG preview: adaugat parametru
-    $OrigIn in Convert-Photo, toate log/isz/compression/FAIL folosesc
-    $OrigIn in loc de $In (temp path)
-  ADD photo_encoder.ps1 — Watch mode (paritate cu SH):
-    --watch / -Watch, --watch-interval / -WatchInterval <secunde>
-    do { ... } while ($Watch) wrapper + polling file-size stability 2s
-    inainte de procesare; fisierele pre-existente marcate in $WatchSeen
-    pentru a fi skipped la primul ciclu
-  UPDATE photo_encoder.sh — cache pentru detect_uhdr() si detect_dji_photo():
-    declare -A UHDR_DETECT_CACHE DJI_DETECT_CACHE; rezultate memorate
-    per fisier, evita exiftool calls redundante in acelasi batch
-  UPDATE photo_encoder.ps1 — cache similar: $script:UhdrCache, $script:DjiCache
-    hashtabele verificate la intrarea Detect-UHDR / Detect-DJIPhoto
-  UPDATE photo_check.sh — optimizare majora exiftool: load_meta() face
-    ~4 bulk calls per fisier (standard EXIF, XMP-hdrgm, XMP-drone-dji
-    doar daca Make/Model DJI, GPS numeric) in loc de ~30 calls;
-    safe_exif / safe_exif_n citesc din META asociativ, fallback direct
-  UPDATE photo_check.ps1 — acelasi pattern: Load-Meta + $script:Meta
-    hashtable, Safe-Exif / Safe-ExifN verifica cache-ul inainte de call
-  SYNC SH+PS1 Watch mode — paritate completa (flag, interval, polling)
-  SYNC SH+PS1 caching detect_uhdr / detect_dji_photo
-  SYNC SH+PS1 bulk exiftool pentru photo_check (perf ~7x pe fisier)
-  UPDATE photo_check SH+PS1 — pre-seed META cu "" pentru toate tag-urile
-    interogate (standard EXIF + hdrgm + GPS + DJI conditional), deci
-    safe_exif hit cache 100% chiar si pentru tag-uri absente in fisier
-    (elimina complet fallback direct call, ~7x → ~10x perf)
-  FIX photo_check.ps1 — Load-Meta era definit dar niciodata apelat;
-    adaugat Load-Meta $filePath la inceputul foreach-ului (cache-ul PS1
-    era inactiv si toate Safe-Exif cadeau pe direct call)
-  FIX photo_encoder.sh run_watch_mode — find nu respecta RECURSIVE=false;
-    adaugat -maxdepth 1 conditional, aliniat cu PS1 (-Recurse:(-not $NoRecursive))
+  FIX SH+PS1 DNG preview — log-ul afisa numele fisierului temporar in loc
+    de DNG-ul original (introdus $orig_input / $OrigIn pastrate la toate call-urile)
+  ADD photo_encoder.ps1 Watch mode — paritate cu SH (--watch, --watch-interval,
+    polling file-size stability 2s, $WatchSeen pentru pre-existente)
+  UPDATE cache detect_uhdr / detect_dji_photo — hashtable per fisier,
+    evita exiftool calls redundante (SH+PS1)
+  UPDATE photo_check bulk exiftool — ~4 calls per fisier (EXIF + hdrgm
+    + DJI conditional + GPS) in loc de ~30; pre-seed META cu "" pentru
+    toate tag-urile → cache hit 100% (~10x perf)
+  SYNC SH+PS1 — Watch mode, caching detect_*, bulk exiftool
+  FIX photo_check.ps1 — Load-Meta era definit dar niciodata apelat
+  FIX photo_encoder.sh run_watch_mode — find nu respecta RECURSIVE=false
+    (adaugat -maxdepth 1 conditional, aliniat cu PS1)
 
 
   v4.2 — Quality presets max/thumb + compare + auto-suggest + extended stats

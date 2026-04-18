@@ -247,12 +247,12 @@ while true; do
     echo -e "    ${GREEN}1)${NC} Conversie rapida (format + preset, automat)"
     echo -e "    ${GREEN}2)${NC} Conversie avansata (toate optiunile)"
     echo -e "    ${GREEN}3)${NC} Conversie cu profil (instagram, web, dji, etc.)"
-    echo -e "    ${GREEN}4)${NC} Extrage Motion / Live Photo video"
+    echo -e "    ${GREEN}4)${NC} Extrage Motion / Live Photo video (Samsung / Google / iPhone / DJI drone)"
     echo -e "    ${GREEN}5)${NC} Ultra HDR (detect / strip / extract / decode)"
-    echo -e "    ${GREEN}6)${NC} DJI (detect / export metadata CSV / privacy strip)"
+    echo -e "    ${GREEN}6)${NC} DJI (detect / export CSV / privacy / clean)"
     echo -e "    ${GREEN}7)${NC} Lossless JPEG optimization"
     echo -e "    ${GREEN}8)${NC} Watch mode (monitorizeaza folder, converteste automat)"
-    echo -e "    ${GREEN}9)${NC} Verifica fisiere foto (analiza + CSV 50 campuri)"
+    echo -e "    ${GREEN}9)${NC} Verifica fisiere foto (analiza + CSV 54 campuri)"
     echo -e "    ${GREEN}0)${NC} Iesire"
     echo ""
     read -p "  Alege optiune [0-9]: " main_choice
@@ -314,18 +314,24 @@ while true; do
             # ── Motion / Live Photo ───────────────────────────────────────
             echo ""
             echo -e "${WHITE}  Extragere video din Motion / Live Photo:${NC}"
+            echo -e "${GRAY}  Samsung Motion Photo | Google Motion Photo | iPhone Live Photo | DJI drone 4K Live Photo${NC}"
+            echo -e "${GRAY}  Nota: DJI Action 6 NU are motion photo real (doar JPG + MP4 separat)${NC}"
             echo -e "    ${GREEN}1)${NC} Extrage video + converteste pozele"
             echo -e "    ${GREEN}2)${NC} DOAR extrage video (fara conversie poze)"
+            echo -e "    ${GREEN}3)${NC} Shareable: extrage + remux faststart (ffmpeg) + converteste poze"
+            echo -e "    ${GREEN}4)${NC} Shareable: DOAR extrage + remux (fara conversie poze)"
+            echo -e "${GRAY}       (shareable = moov atom la inceput → preview instant in WhatsApp/browsers)${NC}"
             echo ""
-            read -p "  Alege [1-2, default=1]: " motion_choice
+            read -p "  Alege [1-4, default=1]: " motion_choice
 
-            if [[ "${motion_choice:-1}" == "2" ]]; then
-                run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --motion-only --skip-existing"
-            else
-                select_format
-                select_preset
-                run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG -m --skip-existing"
-            fi
+            case "${motion_choice:-1}" in
+                2) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --motion-only --skip-existing" ;;
+                3) select_format; select_preset
+                   run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG --motion-shareable --skip-existing" ;;
+                4) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --motion-only --motion-shareable --skip-existing" ;;
+                *) select_format; select_preset
+                   run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG -m --skip-existing" ;;
+            esac
             echo ""
             read -p "  Apasa Enter pentru meniu..." _
             ;;
@@ -353,15 +359,32 @@ while true; do
             echo -e "${WHITE}  DJI Photo actiune:${NC}"
             echo -e "    ${GREEN}1)${NC} Detect    — detecteaza poze DJI, afiseaza info"
             echo -e "    ${GREEN}2)${NC} Export    — export metadata DJI → CSV"
-            echo -e "    ${GREEN}3)${NC} Privacy   — sterge serial number, GPS, device info"
+            echo -e "    ${GREEN}3)${NC} Privacy   — sterge TOT (serial, GPS, Make/Model, device info)"
+            echo -e "    ${GREEN}4)${NC} Clean     — sterge serial + telemetry + binary debug (pastreaza GPS, camera, altitudini)"
+            echo -e "    ${GREEN}5)${NC} Burst group — keep first / skip all din rafale DJI Action (_001..._NNN)"
             echo ""
-            read -p "  Alege actiune [1-3]: " dji_choice
+            read -p "  Alege actiune [1-5]: " dji_choice
             case "$dji_choice" in
                 1) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --dji detect" ;;
                 2) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --dji export" ;;
                 3)
                     select_format
                     run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT --dji privacy-strip"
+                    ;;
+                4)
+                    select_format
+                    run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT --dji clean"
+                    ;;
+                5)
+                    echo ""
+                    echo -e "${WHITE}  Burst group mode:${NC}"
+                    echo -e "    ${GREEN}1)${NC} first — pastreaza doar _001 din fiecare rafala"
+                    echo -e "    ${GREEN}2)${NC} skip  — ignora complet toate pozele din rafale"
+                    read -p "  Alege [1-2, default=1]: " burst_mode_choice
+                    bm="first"; [[ "${burst_mode_choice:-1}" == "2" ]] && bm="skip"
+                    select_format
+                    select_preset
+                    run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG --dji-burst-group $bm"
                     ;;
                 *) echo -e "${RED}  Optiune invalida.${NC}" ;;
             esac

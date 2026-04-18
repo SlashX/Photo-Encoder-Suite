@@ -17,6 +17,8 @@ param(
     [string]$OutputDir = "",
     [switch]$NoRecursive,
     [switch]$CsvOnly,
+    [switch]$FindDuplicates,
+    [int]$FindDuplicatesThreshold = 5,
     [switch]$Verbose
 )
 
@@ -54,6 +56,33 @@ function Fmt-Size([long]$B) {
     if ($B -ge 1MB) { "$([math]::Round($B/1MB,1)) MB" }
     elseif ($B -ge 1KB) { "$([math]::Round($B/1KB)) KB" }
     else { "$B B" }
+}
+
+# dHash 64-bit perceptual hash via ImageMagick. Uses temp file for binary pixel read.
+function Compute-DHashCheck([string]$Path) {
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+        & magick $Path -colorspace Gray -resize "9x8!" -depth 8 "gray:$tmp" 2>$null | Out-Null
+        if (-not (Test-Path $tmp)) { return $null }
+        $bytes = [IO.File]::ReadAllBytes($tmp)
+        if ($bytes.Count -lt 72) { return $null }
+        [uint64]$hash = 0
+        for ($row=0; $row -lt 8; $row++) {
+            for ($col=0; $col -lt 8; $col++) {
+                $idx = $row * 9 + $col
+                $hash = $hash -shl 1
+                if ($bytes[$idx] -gt $bytes[$idx+1]) { $hash = $hash -bor 1 }
+            }
+        }
+        return $hash
+    } catch { return $null }
+    finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+function Hamming-DistanceCheck([uint64]$a, [uint64]$b) {
+    $x = $a -bxor $b; $n = 0
+    while ($x -gt 0) { $n += [int]($x -band 1); $x = $x -shr 1 }
+    return $n
 }
 
 $script:Meta = @{}
@@ -378,7 +407,7 @@ foreach ($F in $Files) {
         $recommendation = "AVIF -p web (cel mai eficient)"
     }
     if ($isDji -eq "yes" -and $djiSerial) {
-        $recommendation += " | DJI: --dji privacy-strip pt sharing"
+        $recommendation += " | DJI: --dji clean (sharing) sau --dji privacy-strip (nuclear)"
     }
 
     # ── Stats ────────────────────────────────────────────────────────
@@ -467,6 +496,47 @@ if ($cntDng -gt 0) {
 }
 if ($cntMotion -gt 0) { Write-Host "  Motion/Live Photo:  $cntMotion" -ForegroundColor Cyan }
 if ($cntGps -gt 0) { Write-Host "  With GPS:           $cntGps" -ForegroundColor White }
+
+# ── Find duplicates (perceptual pHash) ───────────────────────────────────────
+if ($FindDuplicates) {
+    Write-Host ""
+    Write-Host "[INFO] Computing perceptual hashes (dHash 64-bit)..." -ForegroundColor Yellow
+    $phHashes = @(); $phPaths = @()
+    $pcnt = 0
+    foreach ($F in $Files) {
+        $pcnt++
+        if (-not $CsvOnly) { Write-Host "`r[$pcnt/$Total] Hashing..." -NoNewline -ForegroundColor Gray }
+        $ph = Compute-DHashCheck $F.FullName
+        if ($null -ne $ph) { $phHashes += $ph; $phPaths += $F.FullName }
+    }
+    Write-Host ""
+    $n = $phHashes.Count; $groupCount = 0; $pairCount = 0
+    $assigned = @{}
+    $dupFile = Join-Path $OutputDir "photo_duplicates.txt"
+    Set-Content -Path $dupFile -Value "" -Encoding UTF8
+    for ($i = 0; $i -lt $n; $i++) {
+        if ($assigned.ContainsKey($i)) { continue }
+        $group = @($i)
+        for ($j = $i + 1; $j -lt $n; $j++) {
+            if ($assigned.ContainsKey($j)) { continue }
+            $hd = Hamming-DistanceCheck $phHashes[$i] $phHashes[$j]
+            if ($hd -le $FindDuplicatesThreshold) { $group += $j; $assigned[$j] = $true; $pairCount++ }
+        }
+        if ($group.Count -gt 1) {
+            $groupCount++
+            Add-Content -Path $dupFile -Value "=== Group $groupCount ($($group.Count) files) ==="
+            foreach ($idx in $group) { Add-Content -Path $dupFile -Value "  $($phPaths[$idx])  [$($phHashes[$idx].ToString('x16'))]" }
+            Add-Content -Path $dupFile -Value ""
+        }
+    }
+    if ($groupCount -gt 0) {
+        Write-Host "  Duplicate groups:   $groupCount ($pairCount near-duplicates, threshold=$FindDuplicatesThreshold)" -ForegroundColor Yellow
+        Write-Host "  Saved to: $dupFile" -ForegroundColor Gray
+    } else {
+        Write-Host "  No duplicates found (threshold=$FindDuplicatesThreshold)" -ForegroundColor Green
+    }
+}
+
 Write-Host "────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
 Write-Host "  CSV:  $CsvFile" -ForegroundColor White
 Write-Host "        54 campuri per imagine (deschide in Excel/Google Sheets)" -ForegroundColor Gray

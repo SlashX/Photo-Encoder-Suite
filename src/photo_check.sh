@@ -26,6 +26,7 @@ CSV_FILE="${OUTPUT_DIR}/photo_check_report.csv"
 RECURSIVE="true"
 VERBOSE="false"
 CSV_ONLY="false"
+FIND_DUPLICATES="false"; FIND_DUPLICATES_THRESHOLD=5
 
 # ── Supported formats ────────────────────────────────────────────────────────
 INPUT_EXTENSIONS="jpg jpeg png heic heif avif webp jxl tiff tif bmp gif raw cr2 nef arw dng orf rw2"
@@ -68,6 +69,7 @@ OPTIONS:
   -o, --output <dir>     Output directory for CSV (default: same as input)
   --no-recursive         Don't scan subdirectories
   --csv-only             Generate CSV only, minimal terminal output
+  --find-duplicates [n]  Detect perceptual duplicates via dHash (threshold 0-64, default 5)
   -v, --verbose          Show all fields per image in terminal
   -h, --help             Show this help
 
@@ -98,6 +100,36 @@ format_size() {
 }
 
 declare -A META=()
+
+# dHash 64-bit perceptual hash — 9x8 grayscale, compare adjacent pixels.
+# Returns 16-char hex, or empty on failure.
+compute_dhash_check() {
+    local file="$1"
+    local px
+    px=$(magick "$file" -colorspace Gray -resize 9x8\! -depth 8 gray:- 2>/dev/null | od -An -tu1 -v 2>/dev/null | tr -s ' \n' ' ') || return 1
+    [[ -z "$px" ]] && return 1
+    local -a p=()
+    read -ra p <<< "$px"
+    [[ ${#p[@]} -lt 72 ]] && return 1
+    local hi=0 lo=0 row col idx bit
+    for ((row=0; row<8; row++)); do
+        for ((col=0; col<8; col++)); do
+            idx=$((row*9 + col))
+            bit=0; (( p[idx] > p[idx+1] )) && bit=1
+            if (( row < 4 )); then hi=$(( (hi << 1) | bit )); else lo=$(( (lo << 1) | bit )); fi
+        done
+    done
+    printf '%08x%08x' "$hi" "$lo"
+}
+
+hamming_distance_check() {
+    local a="$1" b="$2"
+    local ah=${a:0:8} al=${a:8:8} bh=${b:0:8} bl=${b:8:8}
+    local xh=$((16#$ah ^ 16#$bh)) xl=$((16#$al ^ 16#$bl)) n=0
+    while (( xh > 0 )); do n=$((n + (xh & 1))); xh=$((xh >> 1)); done
+    while (( xl > 0 )); do n=$((n + (xl & 1))); xl=$((xl >> 1)); done
+    echo "$n"
+}
 
 # Bulk-load per-file EXIF tags into META assoc array
 # Reduces exiftool calls from ~30 to ~4 per file
@@ -378,7 +410,7 @@ analyze_image() {
     fi
 
     if [[ "$is_dji" == "yes" && -n "$dji_serial" ]]; then
-        recommendation="$recommendation | DJI: --dji privacy-strip pt sharing"
+        recommendation="$recommendation | DJI: --dji clean (sharing) sau --dji privacy-strip (nuclear)"
     fi
 
     # ── Terminal display ──────────────────────────────────────────────
@@ -509,6 +541,9 @@ parse_args() {
             -o|--output)      OUTPUT_DIR="$2"; shift 2 ;;
             --no-recursive)   RECURSIVE="false"; shift ;;
             --csv-only)       CSV_ONLY="true"; shift ;;
+            --find-duplicates)
+                FIND_DUPLICATES="true"
+                if [[ -n "${2:-}" && "$2" =~ ^[0-9]+$ ]]; then FIND_DUPLICATES_THRESHOLD="$2"; shift 2; else shift; fi ;;
             -v|--verbose)     VERBOSE="true"; shift ;;
             -h|--help)        usage ;;
             --version)        echo "photo_check.sh v${VERSION}"; exit 0 ;;
@@ -590,6 +625,49 @@ main() {
     [[ $cnt_dng -gt 0 ]]    && { echo -e "  DNG files:          ${MAGENTA}${cnt_dng}${NC}"; [[ $cnt_dng_jxl -gt 0 ]] && echo -e "    DNG 1.7+ (JXL):   ${YELLOW}${cnt_dng_jxl}${NC}"; }
     [[ $cnt_motion -gt 0 ]] && echo -e "  Motion/Live Photo:  ${CYAN}${cnt_motion}${NC}"
     [[ $cnt_gps -gt 0 ]]    && echo -e "  With GPS:           ${WHITE}${cnt_gps}${NC}"
+
+    # ── Find duplicates (perceptual pHash) ────────────────────────────
+    if [[ "$FIND_DUPLICATES" == "true" ]]; then
+        echo ""
+        echo -e "${YELLOW}[INFO]${NC} Computing perceptual hashes (dHash 64-bit)..."
+        declare -a ph_hashes=() ph_paths=()
+        local pcnt=0
+        for f in "${image_files[@]}"; do
+            pcnt=$((pcnt+1))
+            [[ "$CSV_ONLY" != "true" ]] && printf "\r${GRAY}[%d/%d]${NC} Hashing..." "$pcnt" "$total"
+            local ph; ph=$(compute_dhash_check "$f")
+            if [[ -n "$ph" ]]; then ph_hashes+=("$ph"); ph_paths+=("$f"); fi
+        done
+        echo ""
+        local n=${#ph_hashes[@]} group_count=0 pair_count=0
+        declare -A assigned=()
+        local DUP_FILE="${OUTPUT_DIR}/photo_duplicates.txt"
+        : > "$DUP_FILE"
+        for ((i=0; i<n; i++)); do
+            [[ -n "${assigned[$i]+x}" ]] && continue
+            local group=("$i")
+            for ((j=i+1; j<n; j++)); do
+                [[ -n "${assigned[$j]+x}" ]] && continue
+                local hd; hd=$(hamming_distance_check "${ph_hashes[$i]}" "${ph_hashes[$j]}")
+                if (( hd <= FIND_DUPLICATES_THRESHOLD )); then
+                    group+=("$j"); assigned[$j]=1; pair_count=$((pair_count+1))
+                fi
+            done
+            if [[ ${#group[@]} -gt 1 ]]; then
+                group_count=$((group_count+1))
+                echo "=== Group $group_count (${#group[@]} files) ===" >> "$DUP_FILE"
+                for idx in "${group[@]}"; do echo "  ${ph_paths[$idx]}  [${ph_hashes[$idx]}]" >> "$DUP_FILE"; done
+                echo "" >> "$DUP_FILE"
+            fi
+        done
+        if [[ $group_count -gt 0 ]]; then
+            echo -e "  ${YELLOW}Duplicate groups:   ${WHITE}${group_count} (${pair_count} near-duplicates, threshold=${FIND_DUPLICATES_THRESHOLD})${NC}"
+            echo -e "  ${GRAY}Saved to: ${DUP_FILE}${NC}"
+        else
+            echo -e "  ${GREEN}No duplicates found${NC} (threshold=${FIND_DUPLICATES_THRESHOLD})"
+        fi
+    fi
+
     echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
     echo -e "  CSV:  ${WHITE}${CSV_FILE}${NC}"
     echo -e "        ${GRAY}54 campuri per imagine (deschide in Excel/Google Sheets)${NC}"

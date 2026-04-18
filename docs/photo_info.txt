@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.3
+  Photo Encoder Suite v4.4
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -33,12 +33,12 @@ CUPRINS
   ─────────────────────
   photo_launcher.sh          — Meniu interactiv (10 optiuni, 0-9)
   photo_encoder.sh           — Engine conversie (toate features-urile)
-  photo_check.sh             — Analiza completa foto + CSV 50 campuri
+  photo_check.sh             — Analiza completa foto + CSV 54 campuri + find-duplicates
 
   WINDOWS (PowerShell)
   ────────────────────
   photo_encoder.ps1          — Script PowerShell
-  photo_check.ps1            — Analiza completa foto + CSV 50 campuri
+  photo_check.ps1            — Analiza completa foto + CSV 54 campuri + find-duplicates
 
   TOOLS (src/tools/) — Instalere & Compilare dependinte externe
   ──────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ CUPRINS
 
   CONFIGURARE (src/profiles/)
   ───────────────────────────
-  profiles/photo_profiles.conf — 22 profile predefinite (instagram, web, dji, etc.)
+  profiles/photo_profiles.conf — 27 profile predefinite (instagram, web, dji, etc.)
 
   DOCUMENTATIE
   ────────────
@@ -164,7 +164,7 @@ Termux (S24 Ultra):
   │   │   ├── tools/
   │   │   │   └── photo_build_ultrahdr.sh
   │   │   └── profiles/
-  │   │       └── photo_profiles.conf   ← 22 profile predefinite (read-only)
+  │   │       └── photo_profiles.conf   ← 27 profile predefinite (read-only)
   │   ├── UserProfiles/           ← profile salvate de utilizator
   │   ├── InputPhotos/           ← pune pozele aici
   │   └── OutputPhotos/          ← rezultatele
@@ -178,7 +178,7 @@ Windows:
   ├── tools\
   │   └── photo_build_ultrahdr.ps1
   ├── profiles\
-  │   └── photo_profiles.conf       ← 22 profile predefinite (read-only)
+  │   └── photo_profiles.conf       ← 27 profile predefinite (read-only)
   └── UserProfiles\                  ← profile salvate de utilizator
 
 
@@ -194,7 +194,7 @@ Windows:
      c. Min resolution filter (optional: --min-res)
      d. Motion / Live Photo extraction (optional: -m)
      e. UHDR handling (detect/strip/extract/decode)
-     f. DJI handling (detect/export/privacy-strip)
+     f. DJI handling (detect/export/privacy-strip/clean, burst-group filter)
      g. HDR detection + action (tonemap/preserve/passthrough)
      h. Build ImageMagick command (resize, crop, quality, depth, etc.)
      i. Convert cu ImageMagick
@@ -248,12 +248,39 @@ OUTPUT NAMING:
 
 FILTERS:
   --min-res <px>         Skip imagini sub aceasta rezolutie
-  --skip-duplicates      Skip fisiere cu hash identic
+  --skip-duplicates      Skip fisiere cu hash identic (SHA256)
+  --skip-similar [n]     Skip perceptual duplicates (dHash 64-bit, Hamming
+                         distance threshold, default n=5). Detecteaza copii
+                         cu rezolutie/quality diferit, crop minor, re-export.
   --lossless-jpeg        Optimizare lossless (doar JPEG→JPEG)
 
 MOTION / LIVE PHOTO:
-  -m, --extract-motion   Extrage video din Motion/Live Photo
-  --motion-only          DOAR extrage video (fara conversie poze)
+  -m, --extract-motion          Extrage video din Motion/Live Photo
+  --motion-only                 DOAR extrage video (fara conversie poze)
+  --motion-shareable            Remux faststart (moov atom mutat la inceput
+                                → preview instant in WhatsApp/browsers) +
+                                orientation inject din EXIF parent JPEG.
+                                Foloseste ffmpeg daca disponibil; altfel
+                                fallback best-effort cu detectie moov
+                                position (majoritatea Samsung/Google au deja
+                                moov-at-start din fabrica).
+  --motion-shareable-strict     Hard-fail daca ffmpeg lipseste (pentru
+                                workflow care nu accepta compromis).
+
+  Dependinta optionala: ffmpeg
+    Termux:  pkg install ffmpeg -y
+    Linux:   apt install ffmpeg / dnf install ffmpeg
+    Windows portable (recomandat — fara admin, fara PATH edit):
+             Download static build: https://www.gyan.dev/ffmpeg/builds/
+             Pune ffmpeg.exe langa photo_encoder.ps1 (src/ffmpeg.exe).
+             PS1 lookup: script dir first, apoi system PATH.
+    Windows system: winget install Gyan.FFmpeg / scoop install ffmpeg
+    macOS:   brew install ffmpeg
+
+  Exemple:
+    photo_encoder.sh -i ./DCIM -o ./out -f avif --motion-shareable
+    photo_encoder.sh -i ./DCIM -o ./videos --motion-only --motion-shareable
+    photo_encoder.sh -i ./DCIM -o ./out --profile motion-share
 
 PROFILES & RESUME:
   --profile <name>       Incarca profil din photo_profiles.conf
@@ -273,7 +300,7 @@ PROFILES & RESUME:
     - Folder creat automat daca nu exista
 
   Doua locatii separate pentru profile:
-    - profiles/photo_profiles.conf — 22 profile predefinite (CLI --profile, read-only)
+    - profiles/photo_profiles.conf — 27 profile predefinite (CLI --profile, read-only)
     - UserProfiles/*.conf — profile salvate de utilizator (interactive, save/load)
     Termux: /storage/emulated/0/Media/UserProfiles/
     Windows: folder Profiles\ langa scriptul principal
@@ -317,17 +344,33 @@ Exemple:
 
 Suporta toate camerele DJI: Osmo Action, Mavic, Mini, Phantom, Air.
 
-3 actiuni:
+4 actiuni:
   --dji detect          Detecteaza poze DJI, afiseaza model + info
   --dji export          Export metadata → dji_photo_metadata.csv (24 campuri)
-  --dji privacy-strip   Sterge: serial number, GPS, XMP-drone-dji, Make, Model
+  --dji clean           Strip serial number (3 locatii EXIF), telemetrie
+                        XMP-drone-dji si binary debug DJI-specific
+                        (~65KB per foto pe Action 6). Pastreaza GPS,
+                        camera si altitude — recomandat pentru share
+                        privat/prieteni.
+  --dji privacy-strip   Nuclear: sterge serial, GPS, XMP-drone-dji,
+                        Make, Model — pentru share public/social media.
+
+Burst-group (DJI Action cameras):
+  Detectie bazata pe filename: DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG
+  (metadata identic intre pozele dintr-un burst → filename-only).
+
+  --dji-burst-group first   Pastreaza doar prima foto din fiecare burst
+  --dji-burst-group all     Converteste toate (default fara flag)
+  --dji-burst-group skip    Skip complet orice grup burst detectat
 
 DJI 4K Live Photo (video embedded in JPEG) se extrage cu -m flag.
 
 Exemple:
   photo_encoder.sh -i ./DCIM -o ./out --dji detect
   photo_encoder.sh -i ./DCIM -o ./csv --dji export
-  photo_encoder.sh -i ./DCIM -o ./clean -f jpeg --dji privacy-strip
+  photo_encoder.sh -i ./DCIM -o ./share -f jpeg --dji clean
+  photo_encoder.sh -i ./DCIM -o ./public -f jpeg --dji privacy-strip
+  photo_encoder.sh -i ./DCIM -o ./out -f avif --dji-burst-group first
 
 
 ═══════════════════════════════════════════════════════════════
@@ -338,14 +381,16 @@ Fisier de configurare cu combinatii predefinite de flags.
 Format: profilename = flags
 Se cauta in: profiles/ → $HOME → Media/Scripts/profiles/
 
-22 profile predefinite:
+27 profile predefinite:
   Social Media: instagram, facebook, twitter, whatsapp, stories
   Web:          web-gallery, web-thumb, web-4k
   Archive:      archive, archive-full, archive-hdr
   Print:        print-a4, print-poster
-  DJI:          dji-web, dji-clean, dji-archive
+  Max:          max-avif, max-jpeg
+  DJI:          dji-web, dji-clean, dji-privacy, dji-archive
   COCA Tattoo:  coca-web, coca-social, coca-portfolio
   Quick:        quick-small, quick-medium, quick-large
+  Motion:       motion-share, motion-share-only
 
 Exemple:
   photo_encoder.sh -i ./DCIM -o ./out --profile instagram
@@ -366,8 +411,11 @@ Conversie batch                  ✓              ✓
 Quality presets                  ✓              ✓
 HDR detect + tonemap             ✓              ✓
 Ultra HDR (5 actiuni)            ✓              ✓
-DJI (detect/export/strip)        ✓              ✓
+DJI (detect/export/clean/strip)  ✓              ✓
+DJI burst-group filter           ✓              ✓
+Perceptual duplicates (pHash)    ✓              ✓
 Motion Photo extraction          ✓              ✓
+Motion shareable (ffmpeg remux)  ✓              ✓
 iPhone Live Photo                ✓              ✓
 DJI 4K Live Photo                ✓              ✓
 Profiles (--profile)             ✓              ✓
@@ -419,6 +467,26 @@ Resume dupa intrerupere:
 Watch mode (monitorizeaza automat):
   photo_encoder.sh -i /sdcard/Media/InputPhotos -o /sdcard/Media/OutputPhotos \
     -f avif -p web --watch --watch-interval 5
+
+Skip perceptual duplicates (copii la rezolutii diferite):
+  photo_encoder.sh -i ./DCIM -o ./out -f avif -p web --skip-similar
+
+DJI clean (share privat cu GPS, fara serial/telemetrie):
+  photo_encoder.sh -i ./DJI_IMG -o ./share -f jpeg --dji clean
+
+DJI burst-group (pastreaza doar prima din fiecare serie burst):
+  photo_encoder.sh -i ./DJI_IMG -o ./out -f avif --dji-burst-group first
+
+Gaseste duplicate perceptuale in folder (raport):
+  photo_check.sh -i ./DCIM --find-duplicates
+  # scrie photo_duplicates.txt cu grupuri + Hamming distance
+
+Motion Photo shareable (preview instant in WhatsApp/browsers):
+  photo_encoder.sh -i ./DCIM -o ./out -f avif --motion-shareable
+  # ffmpeg remux faststart + orientation inject din parent JPEG
+
+Motion Photo doar video shareable (fara conversie poze):
+  photo_encoder.sh -i ./DCIM -o ./videos --motion-only --motion-shareable
 
 
 ═══════════════════════════════════════════════════════════════
@@ -500,5 +568,26 @@ Verifica dependinte:
 
 12. PS1 nu porneste
     → PS1: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+13. Motion Photo extras nu se vede ca preview in WhatsApp/browser
+    → Moov atom e la sfarsitul fisierului (necesita download complet).
+    → Foloseste --motion-shareable pentru remux faststart via ffmpeg.
+    → Termux: pkg install ffmpeg -y (standard, in PATH)
+    → Windows portable (recomandat, fara admin, fara PATH edit):
+         - Descarca static build de pe: https://www.gyan.dev/ffmpeg/builds/
+         - Extrage ffmpeg.exe din arhiva (ffmpeg-release-essentials.zip → bin/)
+         - Copiaza ffmpeg.exe langa photo_encoder.ps1 (in src/)
+         - Scriptul il gaseste automat fara modificari PATH
+    → Windows system-wide: winget install Gyan.FFmpeg / choco install ffmpeg
+    → Fara ffmpeg: Samsung/Google au de obicei moov-at-start deja, deci
+      extract-ul raw este deja shareable in ~80-90% din cazuri.
+
+14. [SHARE WARN: moov-at-end] aparea la --motion-shareable
+    → ffmpeg nu e instalat, video-ul este valid dar nu se preview-eaza
+      instant in app-uri de messaging. Install ffmpeg pentru remux.
+
+15. ffmpeg remux esueaza — [SHARE FALLBACK]
+    → Video-ul embedded poate fi corupt sau cu timestamp neregulat.
+    → Extract-ul raw este pastrat (nu se pierde nimic), dar fara faststart.
 
 ═══════════════════════════════════════════════════════════════
