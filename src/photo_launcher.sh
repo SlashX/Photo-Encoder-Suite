@@ -362,8 +362,9 @@ while true; do
             echo -e "    ${GREEN}3)${NC} Privacy   — sterge TOT (serial, GPS, Make/Model, device info)"
             echo -e "    ${GREEN}4)${NC} Clean     — sterge serial + telemetry + binary debug (pastreaza GPS, camera, altitudini)"
             echo -e "    ${GREEN}5)${NC} Burst group — keep first / skip all din rafale DJI Action (_001..._NNN)"
+            echo -e "    ${GREEN}6)${NC} D-Log LUT — aplica 3D LUT (.cube) pe D-Log / D-LogM"
             echo ""
-            read -p "  Alege actiune [1-5]: " dji_choice
+            read -p "  Alege actiune [1-6]: " dji_choice
             case "$dji_choice" in
                 1) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --dji detect" ;;
                 2) run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" --dji export" ;;
@@ -385,6 +386,22 @@ while true; do
                     select_format
                     select_preset
                     run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG --dji-burst-group $bm"
+                    ;;
+                6)
+                    echo ""
+                    echo -e "${WHITE}  LUT mode:${NC}"
+                    echo -e "    ${GREEN}1)${NC} auto    — aplica doar daca detectam D-Log (Rec.709)"
+                    echo -e "    ${GREEN}2)${NC} rec709  — forteaza Rec.709 (broadcast gamma 2.4)"
+                    echo -e "    ${GREEN}3)${NC} natural — look natural (soft S-curve, shadows calde)"
+                    read -p "  Alege [1-3, default=1]: " lut_choice
+                    case "${lut_choice:-1}" in
+                        2) lut="rec709" ;;
+                        3) lut="natural" ;;
+                        *) lut="auto" ;;
+                    esac
+                    select_format
+                    select_preset
+                    run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $QUALITY_FLAG --dji-lut $lut"
                     ;;
                 *) echo -e "${RED}  Optiune invalida.${NC}" ;;
             esac

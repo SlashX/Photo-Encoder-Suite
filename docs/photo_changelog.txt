@@ -3,6 +3,24 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.5 — DJI D-Log 3D LUT (.cube) color grading
+───────────────────────────────────────────────────────────────
+  ADD --dji-lut <auto|rec709|natural|name|none> — aplica 3D LUT pe poze DJI
+    D-Log / D-LogM prin ffmpeg lut3d filter (hard dependency pe ffmpeg)
+  ADD src/luts/ folder cu 2 starter .cube files (17^3, ~90KB fiecare):
+    rec709.cube   — D-Log -> Rec.709 (gamma 2.4, neutral broadcast)
+    natural.cube  — D-Log -> look natural (soft S-curve + shadows calde)
+  ADD src/luts/_generate.py — generator DJI D-Log transfer curve + inverse
+    (regen starter LUTs sau custom LUTs user)
+  ADD detectie auto D-Log via XMP tags (dji:ColorMode, LogMode, Picture Profile)
+    — mode "auto" aplica rec709 doar daca detecteaza D-Log
+  ADD profile — dji-web-lut, dji-archive-lut (29 profile total)
+  ADD launcher optiunea 6 — sub-meniu 6: D-Log LUT (auto/rec709/natural)
+  ADD stats DJI D-Log in summary (detected, LUT applied/skipped)
+  SYNC SH+PS1 paritate completa — apply_dji_lut / Apply-DJILut,
+    detect_dji_dlog / Test-DJIDLog, validation + pipeline injection identic
+
+
   v4.4 — Motion shareable + DJI clean + burst-group + perceptual duplicates
 ───────────────────────────────────────────────────────────────
   ADD --motion-shareable / --motion-shareable-strict: remux embedded video

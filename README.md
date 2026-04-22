@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR, DJI metadata, Motion Photo extraction + shareable remux, 27 presets and profile system — v4.4
+> Batch photo converter with Ultra HDR, DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.5
 
 ---
 
@@ -14,9 +14,9 @@
 - **Motion Shareable** (`--motion-shareable`): ffmpeg faststart remux + orientation inject for instant preview (WhatsApp, browsers); best-effort moov-position detection when ffmpeg unavailable
 - **Ultra HDR (UHDR)**: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR — detect, info, strip, extract, decode
 - **HDR processing**: auto tone mapping HDR→SDR, force HDR/SDR, bit depth control (8/10/16-bit)
-- **DJI Photo**: detection, 24-field CSV metadata export, GPS/gimbal/flight data, privacy strip, clean mode (strip telemetry + binary debug), burst-group handling (Action cameras)
+- **DJI Photo**: detection, 24-field CSV metadata export, GPS/gimbal/flight data, privacy strip, clean mode (strip telemetry + binary debug), burst-group handling (Action cameras), **D-Log / D-LogM 3D LUT color grading** (ffmpeg lut3d, ship with rec709 + natural .cube files)
 - **Perceptual duplicates**: `--skip-similar` during conversion + `--find-duplicates` in photo_check (dHash 64-bit, Hamming distance)
-- **27 predefined profiles**: instagram, facebook, whatsapp, web-gallery, archive, dji-web, dji-clean, print-a4, max-avif, motion-share and more
+- **29 predefined profiles**: instagram, facebook, whatsapp, web-gallery, archive, dji-web, dji-clean, dji-web-lut, dji-archive-lut, print-a4, max-avif, motion-share and more
 - **6 quality presets**: web, social, archive, print, max (transparent quality), thumb (thumbnails)
 - **Profile system**: save/load full config as `.conf` files (cross-platform KEY=VALUE)
 - **Auto-preset suggestion**: detects input resolution, recommends optimal preset
@@ -232,4 +232,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.4** — 10 files | 27 predefined profiles | bash/PS1 cross-platform
+Current: **v4.5** — 10 files | 29 predefined profiles | bash/PS1 cross-platform

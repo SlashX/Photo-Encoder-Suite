@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.4 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.5 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -28,6 +28,7 @@ param(
     [ValidateSet("","detect","info","strip","extract","decode")][string]$UHDR = "",
     [ValidateSet("","detect","export","privacy-strip","clean")][string]$DJI = "",
     [ValidateSet("","first","all","skip")][string]$DJIBurstGroup = "",
+    [string]$DjiLut = "",
     [switch]$DngPreview,
     [switch]$StripExif,
     [switch]$NoAutoRotate,
@@ -59,7 +60,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.4"
+$Version = "4.5"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ if (-not $ScriptDir) { $ScriptDir = Get-Location }
 $ToolsDir = Join-Path $ScriptDir "tools"
 $ProfilesDir = Join-Path $ScriptDir "profiles"
 $UserProfilesDir = Join-Path $ScriptDir "UserProfiles"
+$LutsDir = Join-Path $ScriptDir "luts"
 
 # ── Launch mode (when no args given on command line) ────────────────────────
 $InteractiveMode = $false
@@ -155,7 +157,7 @@ if ($InteractiveMode) {
                     Write-Host "  Profil anulat — continuam cu configurare manuala." -ForegroundColor Yellow
                     # Reset to defaults
                     $Format = "avif"; $Quality = 80; $Preset = ""; $Resize = ""; $Crop = ""
-                    $ForceSdr = $false; $ForceHdr = $false; $UHDR = ""; $DJI = ""
+                    $ForceSdr = $false; $ForceHdr = $false; $UHDR = ""; $DJI = ""; $DjiLut = ""
                     $StripExif = $false; $SRGB = $false; $WatermarkText = ""
                 } else {
                     Write-Host "  Profile loaded.`n" -ForegroundColor Green
@@ -220,6 +222,7 @@ if ($Profile) {
                     "--motion-shareable-strict" { $MotionShareable = $true; $MotionShareableStrict = $true; $ExtractMotion = $true }
                     "--dji"            { $DJI = $tokens[++$i] }
                     "--dji-burst-group" { $DJIBurstGroup = $tokens[++$i] }
+                    "--dji-lut"        { $DjiLut = $tokens[++$i] }
                     "--uhdr"           { $UHDR = $tokens[++$i] }
                     "--dng-preview"    { $DngPreview = $true }
                     "--watermark-text" { $WatermarkText = $tokens[++$i] }
@@ -284,6 +287,27 @@ if ($UHDR -eq "decode" -and -not $HasUhdrApp) {
     exit 1
 }
 
+if ($DjiLut -and $DjiLut.ToLower() -ne "none") {
+    $DjiLut = $DjiLut.ToLower()
+    if (-not $HasFfmpeg) {
+        Write-Host "[ERROR] ffmpeg not found - required for -DjiLut." -ForegroundColor Red
+        Write-Host "        Portable: drop ffmpeg.exe next to photo_encoder.ps1" -ForegroundColor Red
+        Write-Host "        Or install: winget install Gyan.FFmpeg" -ForegroundColor Red
+        exit 1
+    }
+    if ($DjiLut -ne "auto") {
+        $lutFile = Join-Path $LutsDir "$DjiLut.cube"
+        if (-not (Test-Path $lutFile -PathType Leaf)) {
+            Write-Host "[ERROR] LUT not found: $DjiLut.cube in $LutsDir" -ForegroundColor Red
+            if (Test-Path $LutsDir) {
+                Write-Host "        Available LUTs:" -ForegroundColor Yellow
+                Get-ChildItem $LutsDir -Filter "*.cube" -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "          $($_.BaseName)" -ForegroundColor Green }
+            }
+            exit 1
+        }
+    }
+}
+
 if ($MotionShareableStrict -and -not $HasFfmpeg) {
     Write-Host "[ERROR] ffmpeg not found — required for -MotionShareableStrict." -ForegroundColor Red
     Write-Host "        Portable: drop ffmpeg.exe next to photo_encoder.ps1" -ForegroundColor Red
@@ -320,6 +344,7 @@ if ($MotionShareable -and -not $HasFfmpeg -and -not $MotionShareableStrict) {
 $Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; SimilarSkip=0; MinResSkip=0; Lossless=0
             HdrDet=0; HdrTM=0; HdrPR=0; UhdrDet=0; UhdrStrip=0; UhdrExtract=0; UhdrDecode=0
             DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; DjiClean=0; DjiCleanSaved=[long]0; DjiBurstGroups=0; DjiBurstSkipped=0; SkipExist=0
+            DjiDLogDet=0; DjiLutApplied=0; DjiLutSkipped=0
             DngDet=0; DngJxl=0; DngFailed=0; DngPreview=0
             MotionShareRemux=0; MotionShareBest=0; MotionShareWarn=0; MotionShareFailed=0 }
 $FormatCounts = @{}
@@ -656,6 +681,32 @@ function Extract-DJILivePhoto([string]$In, [string]$OutDir) {
     Write-Host "[DJI] Live Photo: $([IO.Path]::GetFileName($In)) -> ${name}_dji_live.mp4 ($mb MB)" -ForegroundColor Green
     Make-MotionShareable $In $vidOut
     return $true
+}
+
+# Detect DJI D-Log / D-LogM via XMP ColorMode / LogMode tags (requires exiftool)
+function Test-DJIDLog([string]$Path) {
+    if (-not $HasExiftool) { return $false }
+    $tags = & exiftool -s3 "-XMP-drone-dji:ColorMode" "-XMP-drone-dji:LogMode" "-XMP:ColorMode" "-Picture Profile" "$Path" 2>$null
+    if (-not $tags) { return $false }
+    $joined = ($tags -join "|").ToLower()
+    if ($joined -match "d-log|dlog|d_log") { return $true }
+    return $false
+}
+
+# Apply 3D LUT (.cube) via ffmpeg lut3d filter. Returns output temp PNG path or $null.
+function Apply-DJILut([string]$In, [string]$LutName) {
+    if (-not $HasFfmpeg) { return $null }
+    $lutFile = Join-Path $LutsDir "$LutName.cube"
+    if (-not (Test-Path $lutFile -PathType Leaf)) { return $null }
+    $tmp = Join-Path $env:TEMP "dji_lut_$PID`_$([Guid]::NewGuid().ToString('N').Substring(0,8)).png"
+    # ffmpeg needs forward slashes in filter expressions on Windows
+    $lutFilterPath = $lutFile.Replace('\','/').Replace(':','\:')
+    & $FfmpegPath -y -loglevel error -i "$In" -vf "lut3d=file='$lutFilterPath'" "$tmp" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+        return $null
+    }
+    return $tmp
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1163,6 +1214,34 @@ foreach($F in $Files){
         }
     }
 
+    # ── DJI D-Log LUT apply ───────────────────────────────────────────
+    $djiLutTmp = $null
+    if ($DjiLut -and $DjiLut -ne "none" -and $HasExiftool) {
+        $applyLut = $false; $lutName = $DjiLut
+        if ($DjiLut -eq "auto") {
+            if (Test-DJIDLog $srcPath) { $applyLut = $true; $lutName = "rec709"; $Stats.DjiDLogDet++ }
+        } else {
+            $applyLut = $true
+            if (Test-DJIDLog $srcPath) { $Stats.DjiDLogDet++ }
+        }
+        if ($applyLut) {
+            if ($DryRun) {
+                Write-Host "[DRY] DJI LUT apply ($lutName): $($F.Name)" -ForegroundColor Cyan
+                $Stats.DjiLutApplied++
+            } else {
+                $lutOut = Apply-DJILut $srcPath $lutName
+                if ($lutOut) {
+                    Write-Host "[DJI] LUT applied ($lutName): $($F.Name)" -ForegroundColor Magenta
+                    $djiLutTmp = $lutOut; $srcPath = $lutOut
+                    $Stats.DjiLutApplied++
+                } else {
+                    Write-Host "[WARN] DJI LUT failed ($lutName): $($F.Name)" -ForegroundColor Yellow
+                    $Stats.DjiLutSkipped++
+                }
+            }
+        }
+    }
+
     # ── HDR detection ─────────────────────────────────────────────────
     $isHdr = Detect-HDR $srcPath; $hdrAct = Resolve-HDR $isHdr $Format; $tgtD = Get-TgtDepth $hdrAct $Format
     if($isHdr){$Stats.HdrDet++
@@ -1203,6 +1282,8 @@ foreach($F in $Files){
 
     # Cleanup DNG preview tmp (if used)
     if ($dngPreviewTmp -and (Test-Path $dngPreviewTmp)) { Remove-Item $dngPreviewTmp -Force -ErrorAction SilentlyContinue }
+    # Cleanup DJI LUT tmp (if used)
+    if ($djiLutTmp -and (Test-Path $djiLutTmp)) { Remove-Item $djiLutTmp -Force -ErrorAction SilentlyContinue }
 }
 
 if ($Watch) {
@@ -1280,6 +1361,7 @@ if ($InteractiveMode -and -not $DryRun) {
                 "SkipSimilar=$($SkipSimilar.ToString().ToLower())"
                 "SkipSimilarThreshold=$SkipSimilarThreshold"
                 "DJIBurstGroup=$DJIBurstGroup"
+                "DJILut=$DjiLut"
             ) | Out-File $saveFile -Encoding utf8
             Write-Host "  Saved: $saveFile" -ForegroundColor Green
         }
@@ -1316,6 +1398,9 @@ if($Stats.DjiDet -gt 0){
     if($Stats.DjiClean -gt 0){Write-Host "    Cleaned: $($Stats.DjiClean) (saved $(Fmt-Size $Stats.DjiCleanSaved))"}
 }
 if($Stats.DjiBurstGroups -gt 0){Write-Host "  DJI burst groups: $($Stats.DjiBurstGroups) (mode: $DJIBurstGroup, skipped $($Stats.DjiBurstSkipped))" -ForegroundColor Green}
+if($Stats.DjiDLogDet -gt 0 -or $Stats.DjiLutApplied -gt 0){
+    Write-Host "  DJI D-Log: $($Stats.DjiDLogDet) detected, LUT applied: $($Stats.DjiLutApplied)$(if($Stats.DjiLutSkipped -gt 0){", skipped: $($Stats.DjiLutSkipped)"})" -ForegroundColor Magenta
+}
 if ($MotionShareable) {
     $totalShare = $Stats.MotionShareRemux + $Stats.MotionShareBest + $Stats.MotionShareWarn + $Stats.MotionShareFailed
     if ($totalShare -gt 0) {

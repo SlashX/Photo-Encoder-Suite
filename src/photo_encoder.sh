@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# photo_encoder.sh v4.4 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.5 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.4"
+VERSION="4.5"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
@@ -22,6 +22,7 @@ OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
 TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
 PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
 USER_PROFILES_DIR="/storage/emulated/0/Media/UserProfiles"
+LUTS_DIR="/storage/emulated/0/Media/Scripts/luts"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
@@ -63,7 +64,9 @@ HAS_EXIFTOOL="false"
 # ── DJI ──────────────────────────────────────────────────────────────────────
 DJI_ACTION=""                 # "" | detect | export | privacy-strip | clean
 DJI_BURST_GROUP=""            # "" | first | all | skip  (burst filename: DJI_YYYYMMDDHHMMSS_SEQ_D_NNN.JPG)
+DJI_LUT=""                    # "" | auto | <name>  (name = filename in LUTS_DIR without .cube)
 declare -A DJI_BURST_SKIP=()  # key=absolute path of secondary burst photo to skip
+declare -A DJI_DLOG_CACHE=()  # cache for D-Log detection
 
 # ── DNG ──────────────────────────────────────────────────────────────────────
 DNG_PREVIEW_MODE="false"      # true = extract embedded preview JPEG (fast, skip demosaic)
@@ -86,6 +89,7 @@ STATS_HDR_DETECTED=0; STATS_HDR_TONEMAPPED=0; STATS_HDR_PRESERVED=0
 STATS_UHDR_DETECTED=0; STATS_UHDR_STRIPPED=0; STATS_UHDR_EXTRACTED=0; STATS_UHDR_DECODED=0
 STATS_DJI_DETECTED=0; STATS_DJI_EXPORTED=0; STATS_DJI_LIVEPHOTO=0; STATS_DJI_STRIPPED=0; STATS_DJI_CLEANED=0; STATS_DJI_CLEAN_SAVED=0
 STATS_DJI_BURST_GROUPS=0; STATS_DJI_BURST_SKIPPED=0
+STATS_DJI_DLOG_DETECTED=0; STATS_DJI_LUT_APPLIED=0; STATS_DJI_LUT_SKIPPED=0
 STATS_MOTION_SHAREABLE_REMUX=0; STATS_MOTION_SHAREABLE_BEST=0; STATS_MOTION_SHAREABLE_WARN=0; STATS_MOTION_SHAREABLE_FAILED=0
 STATS_DNG_DETECTED=0; STATS_DNG_JXL=0; STATS_DNG_FAILED=0; STATS_DNG_PREVIEW=0
 STATS_SKIPPED_EXISTING=0
@@ -179,6 +183,10 @@ DJI:
                             first  = keep only _001 of each burst, skip rest
                             skip   = skip ALL burst photos (keep only single shots)
                             all    = process every photo (default without flag)
+  --dji-lut <name|auto>    Apply 3D LUT (.cube) to DJI D-Log / D-LogM photos.
+                            Resolves <name>.cube from luts/ (rec709, natural,
+                            or any user-dropped .cube). 'auto' = rec709.
+                            Requires ffmpeg. Non-D-Log files pass through untouched.
 
 OUTPUT NAMING:     --prefix <text>  --suffix <text>
 FILTERS:           --min-res <px>   --skip-duplicates   --skip-similar [thr]   --lossless-jpeg
@@ -409,6 +417,7 @@ parse_profile_args() {
             --motion-shareable-strict) MOTION_SHAREABLE="true"; MOTION_SHAREABLE_STRICT="true"; EXTRACT_MOTION="true"; shift ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
             --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
+            --dji-lut)            DJI_LUT="${2,,}"; shift 2 ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
             --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --skip-existing)      SKIP_EXISTING="true"; shift ;;
@@ -476,6 +485,7 @@ load_profile_conf() {
                 SkipSimilar)      [[ "$val" == "true" ]] && SKIP_SIMILAR="true" ;;
                 SkipSimilarThreshold) [[ "$val" =~ ^[0-9]+$ ]] && SKIP_SIMILAR_THRESHOLD="$val" ;;
                 DJIBurstGroup)    [[ -n "$val" ]] && DJI_BURST_GROUP="${val,,}" ;;
+                DJILut)           [[ -n "$val" ]] && DJI_LUT="${val,,}" ;;
             esac
         fi
     done < "$conf_file"
@@ -534,6 +544,7 @@ MotionShareableStrict=${MOTION_SHAREABLE_STRICT}
 SkipSimilar=${SKIP_SIMILAR}
 SkipSimilarThreshold=${SKIP_SIMILAR_THRESHOLD}
 DJIBurstGroup=${DJI_BURST_GROUP}
+DJILut=${DJI_LUT}
 EOF
             log_info "Profil salvat: ${prof_file}"
         fi
@@ -1000,6 +1011,53 @@ get_dji_info() {
     echo "$info"
 }
 
+# Detect DJI D-Log / D-LogM flat color profile
+# Returns: "dlog" | "dlogm" | "none"
+detect_dji_dlog() {
+    local file="$1"
+    [[ -n "${DJI_DLOG_CACHE[$file]+x}" ]] && { echo "${DJI_DLOG_CACHE[$file]}"; return; }
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { DJI_DLOG_CACHE[$file]="none"; echo "none"; return; }
+
+    local cm
+    cm=$(exiftool -s3 -XMP-drone-dji:ColorMode -ColorMode -PictureProfile "$file" 2>/dev/null | head -1 || echo "")
+    local cm_lc="${cm,,}"
+    case "$cm_lc" in
+        *d-logm*|*dlogm*)   DJI_DLOG_CACHE[$file]="dlogm"; echo "dlogm"; return ;;
+        *d-log*|*dlog*|*d_log*) DJI_DLOG_CACHE[$file]="dlog"; echo "dlog"; return ;;
+    esac
+    DJI_DLOG_CACHE[$file]="none"; echo "none"
+}
+
+# Resolve LUT name to absolute .cube path; returns empty on failure
+resolve_lut_path() {
+    local name="$1"
+    [[ -z "$name" || "$name" == "none" ]] && return 1
+    local candidates=("${LUTS_DIR}/${name}.cube" "${LUTS_DIR}/${name}")
+    for c in "${candidates[@]}"; do
+        [[ -f "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+# Apply a 3D LUT (.cube) to input image via ffmpeg lut3d filter.
+# Writes result to a temp file and echoes the temp path; caller must rm -f.
+# Returns 1 on error (echoes nothing).
+apply_dji_lut() {
+    local input="$1" lut_name="$2"
+    [[ "$HAS_FFMPEG" != "true" ]] && { log_error "ffmpeg required for --dji-lut (install: pkg install ffmpeg)"; return 1; }
+    local lut_path; lut_path=$(resolve_lut_path "$lut_name") || { log_error "LUT not found: $lut_name (searched $LUTS_DIR)"; return 1; }
+
+    local tmp="${TMPDIR:-/tmp}/dji_lut_$$_$(date +%s%N).png"
+    # Escape Windows-style paths and colons for ffmpeg filter; forward-slashes are safe in bash/Termux
+    local lut_esc="${lut_path//\\/\/}"
+    lut_esc="${lut_esc//:/\\:}"
+    if ffmpeg -y -v error -i "$input" -vf "lut3d=file='${lut_esc}'" -frames:v 1 "$tmp" </dev/null 2>/dev/null; then
+        [[ -f "$tmp" && -s "$tmp" ]] && { echo "$tmp"; return 0; }
+    fi
+    rm -f "$tmp" 2>/dev/null
+    return 1
+}
+
 # Export DJI metadata to CSV
 export_dji_metadata() {
     local input_dir="$1" output_dir="$2"
@@ -1447,6 +1505,7 @@ apply_image_watermark() {
 convert_image() {
     local input="$1" output="$2"
     local qval; qval=$(get_effective_quality)
+    local orig_input="$input"   # preserved across LUT/DNG/UHDR pre-processing (used for logging, stats)
 
     # ── UHDR handling ─────────────────────────────────────────────────
     if is_uhdr_candidate "$input"; then
@@ -1523,10 +1582,34 @@ convert_image() {
         fi
     fi
 
+    # ── DJI D-Log LUT (applied to detected D-Log/D-LogM photos) ────────
+    # Redirects `input` to a LUT-corrected temp file for rest of pipeline.
+    local dji_lut_tmp=""
+    if [[ -n "$DJI_LUT" && "$DJI_LUT" != "none" && "$HAS_EXIFTOOL" == "true" ]]; then
+        local dlog_mode; dlog_mode=$(detect_dji_dlog "$input")
+        if [[ "$dlog_mode" != "none" ]]; then
+            STATS_DJI_DLOG_DETECTED=$((STATS_DJI_DLOG_DETECTED + 1))
+            local lut_name="$DJI_LUT"; [[ "$lut_name" == "auto" ]] && lut_name="rec709"
+            if [[ "$DRY_RUN" == "true" ]]; then
+                log_dry "D-Log ($dlog_mode): $(basename "$input") → apply LUT '$lut_name'"
+                STATS_DJI_LUT_APPLIED=$((STATS_DJI_LUT_APPLIED + 1))
+            else
+                local lut_out
+                if lut_out=$(apply_dji_lut "$input" "$lut_name"); then
+                    echo -e "${MAGENTA}[D-Log]${NC} $(basename "$input") → LUT '$lut_name' applied"
+                    dji_lut_tmp="$lut_out"; input="$lut_out"
+                    STATS_DJI_LUT_APPLIED=$((STATS_DJI_LUT_APPLIED + 1))
+                else
+                    log_warn "LUT apply failed for $(basename "$input") — continuing without LUT"
+                    STATS_DJI_LUT_SKIPPED=$((STATS_DJI_LUT_SKIPPED + 1))
+                fi
+            fi
+        fi
+    fi
+
     # ── DNG version detection (supports DNG 1.0 → 1.7.1.0) ────────────
     local _ie="${input##*.}"; _ie="${_ie,,}"
     local dng_preview_tmp=""
-    local orig_input="$input"
     if [[ "$_ie" == "dng" ]]; then
         STATS_DNG_DETECTED=$((STATS_DNG_DETECTED + 1))
         local dng_ver dng_bwd dng_comp dng_class
@@ -1650,9 +1733,11 @@ convert_image() {
             echo -e "  ${CYAN}[COMPARE]${NC} $(format_size $isz) → $(format_size $osz) ${GRAY}(${ratio}%, saved $(format_size $saved) / ${sp}%)${NC}"
         fi
         [[ -n "$dng_preview_tmp" && -f "$dng_preview_tmp" ]] && rm -f "$dng_preview_tmp"
+        [[ -n "${dji_lut_tmp:-}" && -f "$dji_lut_tmp" ]] && rm -f "$dji_lut_tmp"
         return 0
     else
         [[ -n "$dng_preview_tmp" && -f "$dng_preview_tmp" ]] && rm -f "$dng_preview_tmp"
+        [[ -n "${dji_lut_tmp:-}" && -f "$dji_lut_tmp" ]] && rm -f "$dji_lut_tmp"
         log_error "Failed: $(basename "$orig_input")"; return 1
     fi
 }
@@ -1944,6 +2029,7 @@ parse_args() {
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
             --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
+            --dji-lut)            DJI_LUT="${2,,}"; shift 2 ;;
             --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --strip-exif)         STRIP_EXIF="true"; shift ;;
             --keep-exif)          STRIP_EXIF="false"; shift ;;
@@ -1993,6 +2079,12 @@ validate_args() {
     [[ -n "$UHDR_ACTION" ]] && case "$UHDR_ACTION" in detect|strip|extract|decode|info) ;; *) log_error "UHDR: detect/strip/extract/decode/info"; exit 1;; esac
     [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip|clean) ;; *) log_error "DJI: detect/export/privacy-strip/clean"; exit 1;; esac
     [[ -n "$DJI_BURST_GROUP" ]] && case "$DJI_BURST_GROUP" in first|all|skip) ;; *) log_error "DJI burst-group: first/all/skip"; exit 1;; esac
+    if [[ -n "$DJI_LUT" && "$DJI_LUT" != "none" ]]; then
+        [[ "$HAS_FFMPEG" != "true" ]] && { log_error "--dji-lut requires ffmpeg (install: pkg install ffmpeg)"; exit 1; }
+        if [[ "$DJI_LUT" != "auto" ]]; then
+            resolve_lut_path "$DJI_LUT" >/dev/null || { log_error "LUT not found: ${DJI_LUT}.cube in ${LUTS_DIR}"; exit 1; }
+        fi
+    fi
     [[ -n "$CROP_RATIO" && ! "$CROP_RATIO" =~ ^[0-9]+:[0-9]+$ ]] && { log_error "Crop: W:H"; exit 1; }
     mkdir -p "$OUTPUT_DIR"
 }
@@ -2066,7 +2158,7 @@ main() {
                         echo -e "  ${YELLOW}Profil anulat — continuam cu configurare manuala.${NC}"
                         # Reset to defaults (paths raman cele din Paths)
                         OUTPUT_FORMAT="avif"; QUALITY=80; QUALITY_PRESET=""; RESIZE=""; CROP_RATIO=""
-                        HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""; DJI_BURST_GROUP=""
+                        HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""; DJI_BURST_GROUP=""; DJI_LUT=""
                         STRIP_EXIF="false"; SRGB_CONVERT="false"; WATERMARK_TEXT=""
                     else
                         log_info "Profil incarcat."

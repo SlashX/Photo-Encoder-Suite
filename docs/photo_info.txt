@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.4
+  Photo Encoder Suite v4.5
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -365,12 +365,29 @@ Burst-group (DJI Action cameras):
 
 DJI 4K Live Photo (video embedded in JPEG) se extrage cu -m flag.
 
+D-Log / D-LogM 3D LUT (cinematic color grading):
+  Scripts ship cu 2 starter LUTs in src/luts/ (17^3 .cube files):
+    rec709.cube   — D-Log -> Rec.709 standard (gamma 2.4)
+    natural.cube  — look natural (soft S-curve + shadows calde)
+  User poate adauga proprii .cube files (orice dimensiune) — simplu drop in luts/.
+
+  --dji-lut auto     Aplica rec709 doar daca detectam D-Log / D-LogM in XMP
+  --dji-lut rec709   Forteaza rec709.cube pe toate pozele din batch
+  --dji-lut natural  Forteaza natural.cube
+  --dji-lut <name>   Foloseste luts/<name>.cube (user-provided)
+  --dji-lut none     Dezactiveaza (default)
+
+  Motor: ffmpeg lut3d filter (HARD DEPENDENCY — script erori clar daca lipseste).
+  Pipeline: LUT -> temp PNG -> encoder final (format + quality control pastrat).
+
 Exemple:
   photo_encoder.sh -i ./DCIM -o ./out --dji detect
   photo_encoder.sh -i ./DCIM -o ./csv --dji export
   photo_encoder.sh -i ./DCIM -o ./share -f jpeg --dji clean
   photo_encoder.sh -i ./DCIM -o ./public -f jpeg --dji privacy-strip
   photo_encoder.sh -i ./DCIM -o ./out -f avif --dji-burst-group first
+  photo_encoder.sh -i ./DCIM -o ./out -f avif --dji-lut auto
+  photo_encoder.sh -i ./DCIM -o ./graded -f avif -p archive --dji-lut natural
 
 
 ═══════════════════════════════════════════════════════════════
@@ -381,13 +398,14 @@ Fisier de configurare cu combinatii predefinite de flags.
 Format: profilename = flags
 Se cauta in: profiles/ → $HOME → Media/Scripts/profiles/
 
-27 profile predefinite:
+29 profile predefinite:
   Social Media: instagram, facebook, twitter, whatsapp, stories
   Web:          web-gallery, web-thumb, web-4k
   Archive:      archive, archive-full, archive-hdr
   Print:        print-a4, print-poster
   Max:          max-avif, max-jpeg
-  DJI:          dji-web, dji-clean, dji-privacy, dji-archive
+  DJI:          dji-web, dji-clean, dji-privacy, dji-archive,
+                dji-web-lut, dji-archive-lut
   COCA Tattoo:  coca-web, coca-social, coca-portfolio
   Quick:        quick-small, quick-medium, quick-large
   Motion:       motion-share, motion-share-only
