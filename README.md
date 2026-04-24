@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR, DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.5
+> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.6
 
 ---
 
@@ -12,7 +12,7 @@
 - **8 input formats**: HEIC, JPEG, PNG, WEBP, TIFF, RAW/DNG, JXL, AVIF
 - **Motion Photo support**: Samsung, Google, iPhone Live Photo, DJI 4K Live Photo extraction
 - **Motion Shareable** (`--motion-shareable`): ffmpeg faststart remux + orientation inject for instant preview (WhatsApp, browsers); best-effort moov-position detection when ffmpeg unavailable
-- **Ultra HDR (UHDR)**: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR — detect, info, strip, extract, decode
+- **Ultra HDR (UHDR)**: Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR — detect, info, strip, extract, decode, **convert** (HEIC HDR → Ultra HDR JPEG with auto-hybrid preserve/regenerate gainmap via libheif + libultrahdr)
 - **HDR processing**: auto tone mapping HDR→SDR, force HDR/SDR, bit depth control (8/10/16-bit)
 - **DJI Photo**: detection, 24-field CSV metadata export, GPS/gimbal/flight data, privacy strip, clean mode (strip telemetry + binary debug), burst-group handling (Action cameras), **D-Log / D-LogM 3D LUT color grading** (ffmpeg lut3d, ship with rec709 + natural .cube files)
 - **Perceptual duplicates**: `--skip-similar` during conversion + `--find-duplicates` in photo_check (dHash 64-bit, Hamming distance)
@@ -52,7 +52,8 @@ Photo-Encoder-Suite/
 │   │   └── photo_profiles.conf         # 27 predefined profiles
 │   └── tools/
 │       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
-│       └── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
+│       ├── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
+│       └── photo_build_libheif.ps1     # libheif build via vcpkg (Windows, optional)
 ├── docs/
 │   ├── photo_info.txt              # Full setup & usage documentation
 │   └── photo_changelog.txt         # Version history
@@ -120,7 +121,7 @@ cd src
 | 2 | Advanced convert (all options) |
 | 3 | Convert with profile (instagram, web, dji, etc.) |
 | 4 | Motion / Live Photo extraction |
-| 5 | Ultra HDR (detect, strip, extract, decode) |
+| 5 | Ultra HDR (detect, strip, extract, decode, convert / convert-preserve / convert-regen) |
 | 6 | DJI Photo (metadata export + privacy strip) |
 | 7 | Lossless JPEG optimization |
 | 8 | Watch mode (auto-convert new photos) |
@@ -185,17 +186,28 @@ cd src
 Supports Google Ultra HDR, Samsung Super HDR, Apple Adaptive HDR.
 
 ```bash
-./photo_encoder.sh --uhdr detect    # scan for UHDR images
-./photo_encoder.sh --uhdr info      # detailed UHDR metadata
-./photo_encoder.sh --uhdr strip     # remove UHDR gainmap
-./photo_encoder.sh --uhdr extract   # extract gainmap
-./photo_encoder.sh --uhdr decode    # decode via libultrahdr
+./photo_encoder.sh --uhdr detect             # scan for UHDR images
+./photo_encoder.sh --uhdr info               # detailed UHDR metadata
+./photo_encoder.sh --uhdr strip              # remove UHDR gainmap
+./photo_encoder.sh --uhdr extract            # extract gainmap
+./photo_encoder.sh --uhdr decode             # decode via libultrahdr
+./photo_encoder.sh --uhdr convert            # HEIC HDR → Ultra HDR JPEG (auto-hybrid)
+./photo_encoder.sh --uhdr convert-preserve   # preserve OEM gainmap (Samsung / Apple)
+./photo_encoder.sh --uhdr convert-regen      # regenerate gainmap from HDR pixels (P010)
 ```
 
-Build `libultrahdr` locally:
+Optional `--uhdr-gainmap-quality <1-100>` for convert modes (default: `clamp(base-5, 60, 90)`).
+
+Build dependencies for Ultra HDR:
 ```bash
-./tools/photo_build_ultrahdr.sh    # Termux
-.\tools\photo_build_ultrahdr.ps1   # Windows
+# libultrahdr (required for decode + convert)
+./tools/photo_build_ultrahdr.sh          # Termux
+.\tools\photo_build_ultrahdr.ps1         # Windows
+
+# libheif (required for convert* modes)
+pkg install libheif -y                   # Termux
+apt install libheif-examples             # Debian/Ubuntu
+.\tools\photo_build_libheif.ps1          # Windows (vcpkg + Visual Studio)
 ```
 
 ---
@@ -232,4 +244,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.5** — 10 files | 29 predefined profiles | bash/PS1 cross-platform
+Current: **v4.6** — 11 files | 29 predefined profiles | bash/PS1 cross-platform

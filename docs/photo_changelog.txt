@@ -3,6 +3,64 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.6 — HEIC HDR → Ultra HDR JPEG conversion (Samsung/Apple/generic)
+───────────────────────────────────────────────────────────────
+  ADD --uhdr convert — auto-hybrid HEIC HDR → Ultra HDR JPEG (ISO 21496-1)
+    prioritizeaza pastrarea gainmap-ului OEM (Samsung Super HDR, Apple
+    Adaptive HDR), cade pe regenerare din pixeli HDR daca extragerea esueaza
+  ADD --uhdr convert-preserve — forteaza pastrarea gainmap-ului OEM
+    (heif-convert --with-aux -> base + gainmap -> ultrahdr_app -m 0 -a 4)
+  ADD --uhdr convert-regen — regenereaza gainmap din pixeli HDR P010
+    (ffmpeg yuv420p10le -> ultrahdr_app -m 0 -a 1) — source-agnostic,
+    functioneaza pe orice HEIC HDR 10-bit
+  ADD --uhdr-gainmap-quality <N> — quality gainmap JPEG (1-100, optional)
+    default: formula clamp(base_quality - 5, 60, 90)
+  ADD hard dependency libheif (heif-convert) pentru convert modes
+    Termux: pkg install libheif -y
+    Debian: apt install libheif-examples
+    Windows: src/tools/photo_build_libheif.ps1 (vcpkg + libheif[core,hevc,aom])
+  ADD src/tools/photo_build_libheif.ps1 — builder vcpkg automat pentru
+    Windows (Visual Studio + CMake + Git), copiaza heif-convert.exe + DLLs
+    langa photo_encoder.ps1 (portable, no PATH edit)
+  ADD metadata transfer via exiftool (source HEIC → output JPEG),
+    exclude XMP-hdrgm:/XMP-GainMap: pentru a pastra metadata proaspat
+    generat de libultrahdr
+  ADD bit-depth warning pentru surse <10-bit (convert-regen scade calitate)
+  ADD launcher optiunea 5 — 3 sub-moduri noi (convert / convert-preserve /
+    convert-regen) + prompt interactiv base/gainmap quality
+  ADD stats UHDR in summary — preserve/regen/fail counters
+  SYNC SH+PS1 paritate completa — convert_uhdr_auto/preserve/regenerate
+    / ConvertTo-UHDRAuto/Preserve/Regenerate, detect_heic_gainmap
+    / Detect-HeicGainmap, get_gainmap_quality / Get-GainmapQuality;
+    return codes 3-state (ok/hard-fail/soft-fallthrough)
+  UPDATE dependency checks per-mod (in loc de "toate necesare pt toate"):
+    convert          → libheif + ffmpeg + libultrahdr + exiftool
+    convert-preserve → libheif + libultrahdr + exiftool (fara ffmpeg)
+    convert-regen    → ffmpeg + libultrahdr + exiftool (fara libheif)
+  UPDATE detect_heic_gainmap verifica explicit AuxiliaryImageType contine
+    "hdrgainmap" — evita false-positive pe iPhone Portrait (depth map aux)
+  FIX auto-force OUTPUT_FORMAT=jpeg in convert modes — previne skip-existing
+    mismatch cand user-ul omite -f jpeg (Ultra HDR e JPEG-only)
+  FIX PS1 save/load profile include UHDRGainmapQuality (paritate cu SH)
+  FIX STATS_UHDR_CONVERT_FAILED incrementat consistent pe toate caile de
+    hard-fail (nu doar prin auto-dispatcher)
+  FIX --uhdr convert* smart pass-through pentru fisiere non-HEIC (Option B):
+    - UHDR JPG existente -> copy literal (pastreaza gainmap intact, evita
+      re-encode distructiv catre SDR JPEG)
+    - JPG non-UHDR si alte formate -> skip (contor dedicat, nu failed)
+    - HEIC/HEIF -> convert normal prin libheif + libultrahdr
+    pre-filter in main loop + ramura JPG pass-through in convert_image dispatch;
+    stats noi: STATS_UHDR_CONVERT_COPIED + STATS_UHDR_CONVERT_SKIPPED
+    (SH + PS1: UhdrConvertCopied / UhdrConvertSkipped)
+  FIX summary UHDR gate largit — afiseaza sectiunea si cand
+    STATS_UHDR_DETECTED=0 dar exista activitate de convert (ex: batch pur HEIC)
+  FIX --dry-run respectat in pass-through UHDR JPG — copy-ul nu mai ruleaza,
+    se afiseaza mesaj [DRY] si se incrementeaza contorul (SH + PS1)
+  FIX PS1 --uhdr convert* respecta acum -Overwrite pe ambele cai (HEIC convert
+    + UHDR JPG pass-through); anterior Convert-Photo gestiona overwrite, dar
+    dispatch-ul UHDR scurtcircuita apelul. SH era deja corect (check in main loop)
+
+
   v4.5 — DJI D-Log 3D LUT (.cube) color grading
 ───────────────────────────────────────────────────────────────
   ADD --dji-lut <auto|rec709|natural|name|none> — aplica 3D LUT pe poze DJI

@@ -197,20 +197,27 @@ select_extras() {
 
 select_uhdr_action() {
     echo -e "${WHITE}  Ultra HDR actiune:${NC}"
-    echo -e "    ${GREEN}1)${NC} Detect    — detecteaza UHDR, afiseaza info (fara conversie)"
-    echo -e "    ${GREEN}2)${NC} Info      — info detaliat UHDR per fisier"
-    echo -e "    ${GREEN}3)${NC} Strip     — sterge gain map (JPEG mai mic, SDR only)"
-    echo -e "    ${GREEN}4)${NC} Extract   — extrage gain map ca imagine separata"
-    echo -e "    ${GREEN}5)${NC} Decode    — decodare COMPLETA → HDR AVIF/HEIC 10-bit"
+    echo -e "    ${GREEN}1)${NC} Detect           — detecteaza UHDR, afiseaza info (fara conversie)"
+    echo -e "    ${GREEN}2)${NC} Info             — info detaliat UHDR per fisier"
+    echo -e "    ${GREEN}3)${NC} Strip            — sterge gain map (JPEG mai mic, SDR only)"
+    echo -e "    ${GREEN}4)${NC} Extract          — extrage gain map ca imagine separata"
+    echo -e "    ${GREEN}5)${NC} Decode           — decodare COMPLETA → HDR AVIF/HEIC 10-bit"
     echo -e "              ${GRAY}(necesita libultrahdr / ultrahdr_app)${NC}"
+    echo -e "    ${GREEN}6)${NC} Convert (auto)   — HEIC Samsung/Apple HDR → Ultra HDR JPEG (preserve + fallback regen)"
+    echo -e "    ${GREEN}7)${NC} Convert-preserve — forteaza pastrarea gainmap-ului OEM"
+    echo -e "    ${GREEN}8)${NC} Convert-regen    — regenereaza gainmap din pixeli HDR P010"
+    echo -e "              ${GRAY}(convert* necesita libheif + libultrahdr + ffmpeg)${NC}"
     echo ""
-    read -p "  Alege actiune [1-5]: " uhdr_choice
+    read -p "  Alege actiune [1-8]: " uhdr_choice
     case "$uhdr_choice" in
         1) UHDR_FLAG="--uhdr detect" ;;
         2) UHDR_FLAG="--uhdr info" ;;
         3) UHDR_FLAG="--uhdr strip" ;;
         4) UHDR_FLAG="--uhdr extract" ;;
         5) UHDR_FLAG="--uhdr decode" ;;
+        6) UHDR_FLAG="--uhdr convert" ;;
+        7) UHDR_FLAG="--uhdr convert-preserve" ;;
+        8) UHDR_FLAG="--uhdr convert-regen" ;;
         *) UHDR_FLAG="--uhdr detect" ;;
     esac
     echo -e "  → ${GREEN}${UHDR_FLAG}${NC}"
@@ -346,6 +353,14 @@ while true; do
                 run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f $FORMAT $UHDR_FLAG --depth 10"
             elif [[ "$UHDR_FLAG" == *"strip"* ]]; then
                 run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f jpeg $UHDR_FLAG"
+            elif [[ "$UHDR_FLAG" == *"convert"* ]]; then
+                echo -e "${WHITE}  Base JPEG quality:${NC}"
+                read -p "  Quality base (1-100) [90]: " conv_q
+                echo -e "${WHITE}  Gainmap quality (optional — Enter pt formula base-5, clamp 60..90):${NC}"
+                read -p "  Quality gainmap (1-100, Enter=auto): " conv_gq
+                conv_flags="-q ${conv_q:-90}"
+                [[ -n "$conv_gq" ]] && conv_flags="$conv_flags --uhdr-gainmap-quality $conv_gq"
+                run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" -f jpeg $conv_flags $UHDR_FLAG --skip-existing"
             else
                 run_command "$ENCODER -i \"$INPUT_DIR\" -o \"$OUTPUT_DIR\" $UHDR_FLAG"
             fi

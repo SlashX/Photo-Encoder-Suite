@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.5"
+VERSION="4.6"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
@@ -56,8 +56,10 @@ HDR_MODE="auto"               # auto | force-sdr | force-hdr
 BIT_DEPTH=""                  # "" (auto) | 8 | 10 | 16
 
 # ── Ultra HDR (UHDR) ────────────────────────────────────────────────────────
-UHDR_ACTION=""                # "" (auto-detect+warn) | detect | strip | extract | decode | info
-HAS_ULTRAHDR_APP="false"     # set in check_dependencies
+UHDR_ACTION=""                # "" (auto-detect+warn) | detect | strip | extract | decode | info | convert | convert-preserve | convert-regen
+UHDR_GAINMAP_QUALITY=""       # "" (formula: base-5, clamp 60..90) | 1..100
+HAS_ULTRAHDR_APP="false"      # set in check_dependencies
+HAS_HEIF_CONVERT="false"      # set in check_dependencies (libheif: heif-convert CLI)
 
 HAS_EXIFTOOL="false"
 
@@ -87,6 +89,7 @@ declare -A FORMAT_COUNTS=()
 STATS_DUPLICATES_SKIPPED=0; STATS_MINRES_SKIPPED=0; STATS_LOSSLESS_OPTIMIZED=0
 STATS_HDR_DETECTED=0; STATS_HDR_TONEMAPPED=0; STATS_HDR_PRESERVED=0
 STATS_UHDR_DETECTED=0; STATS_UHDR_STRIPPED=0; STATS_UHDR_EXTRACTED=0; STATS_UHDR_DECODED=0
+STATS_UHDR_CONVERTED_PRESERVE=0; STATS_UHDR_CONVERTED_REGEN=0; STATS_UHDR_CONVERT_FAILED=0; STATS_UHDR_CONVERT_COPIED=0; STATS_UHDR_CONVERT_SKIPPED=0
 STATS_DJI_DETECTED=0; STATS_DJI_EXPORTED=0; STATS_DJI_LIVEPHOTO=0; STATS_DJI_STRIPPED=0; STATS_DJI_CLEANED=0; STATS_DJI_CLEAN_SAVED=0
 STATS_DJI_BURST_GROUPS=0; STATS_DJI_BURST_SKIPPED=0
 STATS_DJI_DLOG_DETECTED=0; STATS_DJI_LUT_APPLIED=0; STATS_DJI_LUT_SKIPPED=0
@@ -148,6 +151,10 @@ ULTRA HDR (gain map JPEG — Samsung Super HDR / Google Ultra HDR / Apple Adapti
   --uhdr strip             Strip gain map from UHDR JPEGs (smaller file, SDR only)
   --uhdr extract           Extract gain map as separate image (<name>_gainmap.jpg)
   --uhdr decode            Full HDR decode via libultrahdr → encode to AVIF/HEIC 10-bit
+  --uhdr convert           HEIC HDR → Ultra HDR JPEG (auto: preserve if ISO gainmap, else regenerate)
+  --uhdr convert-preserve  HEIC HDR → Ultra HDR JPEG (force preserve OEM gainmap — fails if absent)
+  --uhdr convert-regen     HEIC HDR → Ultra HDR JPEG (force regenerate from P010 HDR pixels)
+  --uhdr-gainmap-quality N Gainmap JPEG quality 1..100 (default: base_quality - 5, clamped 60..90)
                             (requires ultrahdr_app in PATH — see setup instructions)
   --uhdr info              Show detailed UHDR metadata per file (verbose)
   (default without --uhdr: auto-detect UHDR, show warning, convert base SDR normally)
@@ -263,21 +270,51 @@ check_dependencies() {
     }
 
     command -v ultrahdr_app &>/dev/null && HAS_ULTRAHDR_APP="true" || {
-        if [[ "$UHDR_ACTION" == "decode" ]]; then
-            log_error "ultrahdr_app not found. Required for --uhdr decode."
-            log_error "Build from: https://github.com/google/libultrahdr"
-            log_error "After build, copy ultrahdr_app to PATH."
-            exit 1
-        fi
-        [[ -n "$UHDR_ACTION" ]] && log_warn "libultrahdr not found. Advanced UHDR decode disabled."
+        case "$UHDR_ACTION" in
+            decode|convert|convert-preserve|convert-regen)
+                log_error "ultrahdr_app not found. Required for --uhdr ${UHDR_ACTION}."
+                log_error "Build from: https://github.com/google/libultrahdr"
+                log_error "After build, copy ultrahdr_app to PATH."
+                exit 1 ;;
+            "") ;;
+            *) log_warn "libultrahdr not found. Advanced UHDR decode/convert disabled." ;;
+        esac
     }
+
+    command -v heif-convert &>/dev/null && HAS_HEIF_CONVERT="true"
+    command -v ffmpeg &>/dev/null && HAS_FFMPEG="true"
+
+    # UHDR convert dependency checks — per-mode (convert needs everything, preserve skips ffmpeg, regen skips heif-convert)
+    case "$UHDR_ACTION" in
+        convert|convert-preserve)
+            if [[ "$HAS_HEIF_CONVERT" != "true" ]]; then
+                log_error "heif-convert (libheif) not found. Required for --uhdr ${UHDR_ACTION}."
+                log_error "Install: pkg install libheif -y (Termux) / apt install libheif-examples (Debian)"
+                log_error "Windows: run .\\tools\\photo_build_libheif.ps1"
+                exit 1
+            fi ;;
+    esac
+    case "$UHDR_ACTION" in
+        convert|convert-regen)
+            if [[ "$HAS_FFMPEG" != "true" ]]; then
+                log_error "ffmpeg not found. Required for --uhdr ${UHDR_ACTION} (HEIC → P010 extraction)."
+                log_error "Install: pkg install ffmpeg -y (Termux) / apt install ffmpeg (Debian)"
+                exit 1
+            fi ;;
+    esac
+    case "$UHDR_ACTION" in
+        convert|convert-preserve|convert-regen)
+            if [[ "$HAS_EXIFTOOL" != "true" ]]; then
+                log_error "exiftool not found. Required for --uhdr ${UHDR_ACTION} (metadata transfer)."
+                exit 1
+            fi ;;
+    esac
 
     if [[ "$SKIP_DUPLICATES" == "true" ]]; then
         command -v sha256sum &>/dev/null && HASH_CMD="sha256sum" || \
         { command -v shasum &>/dev/null && HASH_CMD="shasum -a 256" || { log_warn "sha256sum not found."; SKIP_DUPLICATES="false"; }; }
     fi
 
-    command -v ffmpeg &>/dev/null && HAS_FFMPEG="true"
     if [[ "$MOTION_SHAREABLE_STRICT" == "true" && "$HAS_FFMPEG" != "true" ]]; then
         log_error "ffmpeg not found — required for --motion-shareable-strict."
         log_error "Install: pkg install ffmpeg -y (Termux) / apt install ffmpeg (Linux)"
@@ -419,6 +456,7 @@ parse_profile_args() {
             --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
             --dji-lut)            DJI_LUT="${2,,}"; shift 2 ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
+            --uhdr-gainmap-quality) UHDR_GAINMAP_QUALITY="$2"; shift 2 ;;
             --dng-preview)        DNG_PREVIEW_MODE="true"; shift ;;
             --skip-existing)      SKIP_EXISTING="true"; shift ;;
             --overwrite)          OVERWRITE="true"; shift ;;
@@ -458,6 +496,7 @@ load_profile_conf() {
                 Depth)            [[ -n "$val" ]] && BIT_DEPTH="$val" ;;
                 HdrMode)          [[ -n "$val" ]] && HDR_MODE="$val" ;;
                 UHDR)             [[ -n "$val" ]] && UHDR_ACTION="$val" ;;
+                UHDRGainmapQuality) [[ "$val" =~ ^[0-9]+$ ]] && UHDR_GAINMAP_QUALITY="$val" ;;
                 DJI)              [[ -n "$val" ]] && DJI_ACTION="$val" ;;
                 DNGPreview)       [[ "$val" == "true" ]] && DNG_PREVIEW_MODE="true" ;;
                 StripExif)        [[ "$val" == "true" ]] && STRIP_EXIF="true" ;;
@@ -517,6 +556,7 @@ MaxSize=${MAX_FILE_SIZE}
 Depth=${BIT_DEPTH}
 HdrMode=${hdr_val}
 UHDR=${UHDR_ACTION}
+UHDRGainmapQuality=${UHDR_GAINMAP_QUALITY}
 DJI=${DJI_ACTION}
 DNGPreview=${DNG_PREVIEW_MODE}
 StripExif=${STRIP_EXIF}
@@ -923,6 +963,207 @@ get_effective_quality() {
     local q="$QUALITY"
     [[ -n "$QUALITY_PRESET" ]] && q=$(get_preset_quality "$QUALITY_PRESET" "$OUTPUT_FORMAT")
     echo "$q"
+}
+
+# Resolve gainmap quality: user-set --uhdr-gainmap-quality, else formula (base-5, clamp 60..90)
+get_gainmap_quality() {
+    local base; base=$(get_effective_quality)
+    if [[ -n "$UHDR_GAINMAP_QUALITY" ]]; then
+        echo "$UHDR_GAINMAP_QUALITY"; return
+    fi
+    local g=$((base - 5))
+    (( g < 60 )) && g=60
+    (( g > 90 )) && g=90
+    echo "$g"
+}
+
+# Detect ISO 21496-1 / hdrgm: gainmap in HEIC (preserve-mode feasibility check)
+# Returns: "iso21496" (hdrgm: XMP), "aux" (HDR gainmap auxiliary image), "none"
+# Note: aux type is matched explicitly — depth maps / disparity aux images are NOT gainmaps.
+detect_heic_gainmap() {
+    local file="$1"
+    [[ "$HAS_EXIFTOOL" != "true" ]] && { echo "none"; return; }
+
+    local xmp; xmp=$(exiftool -s3 -XMP-hdrgm:all "$file" 2>/dev/null | head -3 || echo "")
+    [[ -n "$xmp" ]] && { echo "iso21496"; return; }
+
+    local iso; iso=$(exiftool -s3 -XMP-GainMap:all "$file" 2>/dev/null | head -3 || echo "")
+    [[ -n "$iso" ]] && { echo "iso21496"; return; }
+
+    # Apple Adaptive HDR: aux type must be hdrgainmap (exclude depthmap / disparity portrait aux)
+    local aux_type; aux_type=$(exiftool -s3 -AuxiliaryImageType "$file" 2>/dev/null | head -1 || echo "")
+    [[ "$aux_type" == *hdrgainmap* || "$aux_type" == *HDRGainMap* ]] && { echo "aux"; return; }
+
+    # Apple-specific HDR markers (no aux type tag, but HDR present)
+    local apple; apple=$(exiftool -s3 -HDRGainMapVersion -HDRHeadroom "$file" 2>/dev/null | head -1 || echo "")
+    [[ -n "$apple" ]] && { echo "aux"; return; }
+
+    echo "none"
+}
+
+# Regenerate-mode: HEIC HDR → P010 YUV → ultrahdr_app -a 1 → Ultra HDR JPEG
+# Source-agnostic: works on Samsung, Apple, generic 10-bit HEIC HDR.
+convert_uhdr_regenerate() {
+    local input="$1" output="$2"
+    [[ "$HAS_ULTRAHDR_APP" != "true" ]] && { log_error "ultrahdr_app required"; return 1; }
+    [[ "$HAS_FFMPEG" != "true" ]] && { log_error "ffmpeg required for HEIC → P010"; return 1; }
+
+    local name="${input##*/}"; name="${name%.*}"
+    local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/uhdr_regen_XXXXXX") || { log_error "mktemp failed"; return 1; }
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_dry "Would regenerate Ultra HDR: ${input##*/} → $(basename "$output")"
+        rm -rf "$tmpdir"; return 0
+    fi
+
+    local dims; dims=$(get_image_dimensions "$input")
+    local w="${dims%%x*}" h="${dims##*x}"
+    if [[ -z "$w" || -z "$h" || "$w" == "0" ]]; then
+        log_error "Cannot determine HEIC dimensions: ${input##*/}"
+        rm -rf "$tmpdir"; return 1
+    fi
+
+    # Bit-depth hint (logs warning if source is 8-bit — regenerate expects 10-bit HDR)
+    local bitpersample
+    bitpersample=$(exiftool -s3 -BitsPerSample "$input" 2>/dev/null | head -1 || echo "")
+    if [[ "$bitpersample" =~ ^[0-9]+$ && "$bitpersample" -lt 10 ]]; then
+        log_warn "Source appears 8-bit (${bitpersample}bpp) — UHDR regenerate works best with ≥10-bit HDR HEIC"
+    fi
+
+    local p010="${tmpdir}/${name}.p010"
+    local ff_log="${tmpdir}/ffmpeg.log"
+    ffmpeg -y -loglevel error -i "$input" -pix_fmt yuv420p10le -f rawvideo "$p010" > "$ff_log" 2>&1 || {
+        log_error "ffmpeg HEIC → P010 failed: ${input##*/}"
+        [[ "$VERBOSE" == "true" ]] && cat "$ff_log"
+        rm -rf "$tmpdir"; return 1
+    }
+
+    local qbase; qbase=$(get_effective_quality)
+    local qgain; qgain=$(get_gainmap_quality)
+    local uhdr_log="${tmpdir}/uhdr.log"
+    local uhdr_out="${tmpdir}/${name}_uhdr.jpg"
+
+    # ultrahdr_app API-0 create: -a 1 (P010 input), -t 2 (PQ transfer), -q base, -Q gainmap
+    ultrahdr_app -m 0 -p "$p010" -w "$w" -h "$h" -a 1 -t 2 -q "$qbase" -Q "$qgain" -z "$uhdr_out" \
+        > "$uhdr_log" 2>&1 || {
+        log_error "ultrahdr_app regenerate failed: ${input##*/}"
+        [[ "$VERBOSE" == "true" ]] && cat "$uhdr_log"
+        rm -rf "$tmpdir"; return 1
+    }
+
+    [[ ! -s "$uhdr_out" ]] && { log_error "ultrahdr_app produced empty output: ${input##*/}"; rm -rf "$tmpdir"; return 1; }
+
+    mv "$uhdr_out" "$output"
+
+    # Transfer EXIF/GPS/orientation from source HEIC → output Ultra HDR JPEG
+    exiftool -overwrite_original -TagsFromFile "$input" \
+        -EXIF:all -IPTC:all -XMP:all --XMP-hdrgm:all --XMP-GainMap:all \
+        -Orientation -DateTimeOriginal -GPS:all \
+        "$output" > /dev/null 2>&1 || log_verbose "Metadata transfer partial: ${input##*/}"
+
+    local in_size out_size
+    in_size=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null)
+    out_size=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
+    STATS_TOTAL_IN_SIZE=$((STATS_TOTAL_IN_SIZE + in_size))
+    STATS_TOTAL_OUT_SIZE=$((STATS_TOTAL_OUT_SIZE + out_size))
+    STATS_UHDR_CONVERTED_REGEN=$((STATS_UHDR_CONVERTED_REGEN + 1))
+    log_uhdr "UHDR regen: ${input##*/} → $(basename "$output") ($(format_size $in_size) → $(format_size $out_size), q=${qbase}/g=${qgain})"
+
+    rm -rf "$tmpdir"
+    return 0
+}
+
+# Preserve-mode: HEIC with embedded ISO gainmap → extract base + gainmap → ultrahdr_app -a 4
+# Honors OEM tone-map intent. Requires hdrgm:/GainMap XMP or auxiliary gainmap image.
+convert_uhdr_preserve() {
+    local input="$1" output="$2"
+    [[ "$HAS_ULTRAHDR_APP" != "true" ]] && { log_error "ultrahdr_app required"; return 1; }
+    [[ "$HAS_HEIF_CONVERT" != "true" ]] && { log_error "heif-convert required"; return 1; }
+
+    local gm; gm=$(detect_heic_gainmap "$input")
+    [[ "$gm" == "none" ]] && { log_verbose "No ISO gainmap in: ${input##*/}"; return 2; }
+
+    local name="${input##*/}"; name="${name%.*}"
+    local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/uhdr_preserve_XXXXXX") || { log_error "mktemp failed"; return 1; }
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_dry "Would preserve Ultra HDR: ${input##*/} → $(basename "$output")"
+        rm -rf "$tmpdir"; return 0
+    fi
+
+    # Extract primary (base SDR) + auxiliary (gainmap) JPEGs via heif-convert
+    local base_jpg="${tmpdir}/${name}_base.jpg"
+    local gainmap_jpg="${tmpdir}/${name}_gainmap.jpg"
+    local heif_log="${tmpdir}/heif.log"
+
+    heif-convert -q 95 --with-aux "$input" "${tmpdir}/${name}.jpg" > "$heif_log" 2>&1 || {
+        log_error "heif-convert failed: ${input##*/}"
+        [[ "$VERBOSE" == "true" ]] && cat "$heif_log"
+        rm -rf "$tmpdir"; return 1
+    }
+
+    # heif-convert --with-aux produces: name.jpg (primary) + name-<aux-id>.jpg (auxiliary)
+    # Find primary and gainmap
+    local main_file aux_file
+    main_file=$(ls -1 "${tmpdir}/${name}.jpg" 2>/dev/null | head -1)
+    aux_file=$(ls -1 "${tmpdir}/${name}"-*.jpg 2>/dev/null | head -1)
+
+    if [[ ! -s "$main_file" || ! -s "$aux_file" ]]; then
+        log_verbose "heif-convert: no auxiliary gainmap found for ${input##*/}"
+        rm -rf "$tmpdir"; return 2
+    fi
+
+    cp "$main_file" "$base_jpg"
+    cp "$aux_file" "$gainmap_jpg"
+
+    local uhdr_log="${tmpdir}/uhdr.log"
+    local uhdr_out="${tmpdir}/${name}_uhdr.jpg"
+
+    # ultrahdr_app API-0: -a 4 (base + gainmap JPEGs)
+    ultrahdr_app -m 0 -i "$base_jpg" -g "$gainmap_jpg" -z "$uhdr_out" \
+        > "$uhdr_log" 2>&1 || {
+        log_verbose "ultrahdr_app preserve failed (gainmap incompatible): ${input##*/}"
+        [[ "$VERBOSE" == "true" ]] && cat "$uhdr_log"
+        rm -rf "$tmpdir"; return 2
+    }
+
+    [[ ! -s "$uhdr_out" ]] && { rm -rf "$tmpdir"; return 2; }
+
+    mv "$uhdr_out" "$output"
+
+    exiftool -overwrite_original -TagsFromFile "$input" \
+        -EXIF:all -IPTC:all -XMP:all --XMP-hdrgm:all --XMP-GainMap:all \
+        -Orientation -DateTimeOriginal -GPS:all \
+        "$output" > /dev/null 2>&1 || log_verbose "Metadata transfer partial: ${input##*/}"
+
+    local in_size out_size
+    in_size=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null)
+    out_size=$(stat -c%s "$output" 2>/dev/null || stat -f%z "$output" 2>/dev/null)
+    STATS_TOTAL_IN_SIZE=$((STATS_TOTAL_IN_SIZE + in_size))
+    STATS_TOTAL_OUT_SIZE=$((STATS_TOTAL_OUT_SIZE + out_size))
+    STATS_UHDR_CONVERTED_PRESERVE=$((STATS_UHDR_CONVERTED_PRESERVE + 1))
+    log_uhdr "UHDR preserve: ${input##*/} → $(basename "$output") ($(format_size $in_size) → $(format_size $out_size), src=$gm)"
+
+    rm -rf "$tmpdir"
+    return 0
+}
+
+# Auto-hybrid dispatcher: try preserve first (if gainmap detected), fall back to regenerate
+convert_uhdr_auto() {
+    local input="$1" output="$2"
+    local gm; gm=$(detect_heic_gainmap "$input")
+    if [[ "$gm" != "none" ]]; then
+        convert_uhdr_preserve "$input" "$output"
+        local rc=$?
+        [[ $rc -eq 0 ]] && return 0
+        [[ $rc -eq 1 ]] && { STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1)); return 1; }
+        # rc==2: soft fail (no aux or incompatible) — fall through to regenerate
+        log_verbose "Preserve fell through to regenerate: ${input##*/}"
+    fi
+    convert_uhdr_regenerate "$input" "$output"
+    local rc2=$?
+    [[ $rc2 -ne 0 ]] && STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1))
+    return $rc2
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1507,6 +1748,55 @@ convert_image() {
     local qval; qval=$(get_effective_quality)
     local orig_input="$input"   # preserved across LUT/DNG/UHDR pre-processing (used for logging, stats)
 
+    # ── UHDR convert (HEIC HDR → Ultra HDR JPEG) ──────────────────────
+    # Forces .jpg output regardless of --format (Ultra HDR is JPEG-only).
+    case "$UHDR_ACTION" in
+        convert|convert-preserve|convert-regen)
+            local iext="${input##*.}"; iext="${iext,,}"
+            if [[ "$iext" == "heic" || "$iext" == "heif" ]]; then
+                local jpg_out="${output%.*}.jpg"
+                case "$UHDR_ACTION" in
+                    convert)          convert_uhdr_auto "$input" "$jpg_out"; return $? ;;
+                    convert-preserve)
+                        convert_uhdr_preserve "$input" "$jpg_out"
+                        local rc=$?
+                        if [[ $rc -eq 2 ]]; then
+                            log_warn "No ISO gainmap in ${input##*/} — convert-preserve skipped (use --uhdr convert for auto-hybrid)"
+                            STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1))
+                            return 1
+                        fi
+                        [[ $rc -ne 0 ]] && STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1))
+                        return $rc ;;
+                    convert-regen)
+                        convert_uhdr_regenerate "$input" "$jpg_out"
+                        local rc=$?
+                        [[ $rc -ne 0 ]] && STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1))
+                        return $rc ;;
+                esac
+            elif [[ "$iext" == "jpg" || "$iext" == "jpeg" ]]; then
+                # UHDR JPG pass-through — literal copy preserves the embedded gainmap.
+                # Pre-filter in main loop ensured this JPG is already UHDR (non-UHDR JPGs are skipped there).
+                local jpg_out="${output%.*}.jpg"
+                if [[ "$DRY_RUN" == "true" ]]; then
+                    log_dry "UHDR JPG pass-through: ${input##*/} -> ${jpg_out##*/}"
+                    STATS_UHDR_CONVERT_COPIED=$((STATS_UHDR_CONVERT_COPIED + 1))
+                    return 0
+                fi
+                if cp -f "$input" "$jpg_out"; then
+                    STATS_UHDR_CONVERT_COPIED=$((STATS_UHDR_CONVERT_COPIED + 1))
+                    log_verbose "UHDR JPG copied (gainmap preserved): ${input##*/}"
+                    return 0
+                else
+                    log_warn "Failed to copy UHDR JPG: ${input##*/}"
+                    STATS_UHDR_CONVERT_FAILED=$((STATS_UHDR_CONVERT_FAILED + 1))
+                    return 1
+                fi
+            else
+                log_verbose "Skip UHDR convert (not HEIC/HEIF/UHDR-JPG): ${input##*/}"
+            fi
+            ;;
+    esac
+
     # ── UHDR handling ─────────────────────────────────────────────────
     if is_uhdr_candidate "$input"; then
         local uhdr_type; uhdr_type=$(detect_uhdr "$input")
@@ -1906,6 +2196,27 @@ process_files() {
         fi
         [[ "$MOTION_ONLY" == "true" ]] && continue
 
+        # UHDR convert pre-filter: only HEIC/HEIF (→ convert) and UHDR JPGs (→ copy-through) proceed.
+        # Non-UHDR JPGs and other formats are skipped to preserve their existing data.
+        if [[ "$UHDR_ACTION" == "convert" || "$UHDR_ACTION" == "convert-preserve" || "$UHDR_ACTION" == "convert-regen" ]]; then
+            local _uc_keep=false
+            case "$ext" in
+                heic|heif) _uc_keep=true ;;
+                jpg|jpeg)
+                    if is_uhdr_candidate "$file"; then
+                        local _uc_type; _uc_type=$(detect_uhdr "$file")
+                        [[ "$_uc_type" != "none" && "$_uc_type" != "unknown" ]] && _uc_keep=true
+                    fi
+                    ;;
+            esac
+            if [[ "$_uc_keep" != "true" ]]; then
+                STATS_UHDR_CONVERT_SKIPPED=$((STATS_UHDR_CONVERT_SKIPPED + 1))
+                skipped=$((skipped + 1))
+                log_verbose "Skip UHDR convert (not HEIC/UHDR-JPG): $bn"
+                continue
+            fi
+        fi
+
         local on; on=$(build_output_filename "$bn"); local of="${od}/${on}"
         [[ -f "$of" && "$OVERWRITE" != "true" ]] && { skipped=$((skipped+1)); continue; }
 
@@ -1942,12 +2253,18 @@ process_files() {
     fi
     [[ $tm -gt 0 ]] && { echo -e "  Motion videos:            ${GREEN}${tm}${NC}"; [[ $motion_ext -gt 0 ]] && echo -e "    Samsung/Google:         ${WHITE}${motion_ext}${NC}"; [[ $live_ext -gt 0 ]] && echo -e "    iPhone Live Photo:      ${WHITE}${live_ext}${NC}"; }
 
-    if [[ $STATS_UHDR_DETECTED -gt 0 ]]; then
+    local _uhdr_any=$((STATS_UHDR_DETECTED + STATS_UHDR_CONVERTED_PRESERVE + STATS_UHDR_CONVERTED_REGEN + STATS_UHDR_CONVERT_COPIED + STATS_UHDR_CONVERT_SKIPPED + STATS_UHDR_CONVERT_FAILED))
+    if [[ $_uhdr_any -gt 0 ]]; then
         echo -e "${CYAN}────────────────────────────────────────────────────────────────${NC}"
-        echo -e "  ${BLUE}Ultra HDR images:         ${WHITE}${STATS_UHDR_DETECTED}${NC}"
+        [[ $STATS_UHDR_DETECTED -gt 0 ]] && echo -e "  ${BLUE}Ultra HDR images:         ${WHITE}${STATS_UHDR_DETECTED}${NC}"
         [[ $STATS_UHDR_STRIPPED -gt 0 ]]   && echo -e "    Gain maps stripped:   ${WHITE}${STATS_UHDR_STRIPPED}${NC}"
         [[ $STATS_UHDR_EXTRACTED -gt 0 ]]  && echo -e "    Gain maps extracted:  ${WHITE}${STATS_UHDR_EXTRACTED}${NC}"
         [[ $STATS_UHDR_DECODED -gt 0 ]]    && echo -e "    Full HDR decoded:     ${WHITE}${STATS_UHDR_DECODED}${NC}"
+        [[ $STATS_UHDR_CONVERTED_PRESERVE -gt 0 ]] && echo -e "    Converted (preserve): ${GREEN}${STATS_UHDR_CONVERTED_PRESERVE}${NC}"
+        [[ $STATS_UHDR_CONVERTED_REGEN -gt 0 ]]    && echo -e "    Converted (regen):    ${GREEN}${STATS_UHDR_CONVERTED_REGEN}${NC}"
+        [[ $STATS_UHDR_CONVERT_COPIED -gt 0 ]]     && echo -e "    Copied (UHDR JPG):    ${GREEN}${STATS_UHDR_CONVERT_COPIED}${NC}"
+        [[ $STATS_UHDR_CONVERT_SKIPPED -gt 0 ]]    && echo -e "    Skipped (non-UHDR):   ${GRAY}${STATS_UHDR_CONVERT_SKIPPED}${NC}"
+        [[ $STATS_UHDR_CONVERT_FAILED -gt 0 ]]     && echo -e "    Convert failed:       ${RED}${STATS_UHDR_CONVERT_FAILED}${NC}"
     fi
     if [[ $STATS_HDR_DETECTED -gt 0 ]]; then
         echo -e "  ${MAGENTA}Classic HDR images:       ${WHITE}${STATS_HDR_DETECTED}${NC}"
@@ -2027,6 +2344,7 @@ parse_args() {
             --force-sdr)          HDR_MODE="force-sdr"; shift ;;
             --force-hdr)          HDR_MODE="force-hdr"; shift ;;
             --uhdr)               UHDR_ACTION="${2,,}"; shift 2 ;;
+            --uhdr-gainmap-quality) UHDR_GAINMAP_QUALITY="$2"; shift 2 ;;
             --dji)                DJI_ACTION="${2,,}"; shift 2 ;;
             --dji-burst-group)    DJI_BURST_GROUP="${2,,}"; shift 2 ;;
             --dji-lut)            DJI_LUT="${2,,}"; shift 2 ;;
@@ -2076,7 +2394,13 @@ validate_args() {
     [[ "$OUTPUT_FORMAT" == "jpg" ]] && OUTPUT_FORMAT="jpeg"
     [[ -n "$QUALITY_PRESET" ]] && case "$QUALITY_PRESET" in web|social|archive|print|max|thumb) ;; *) log_error "Bad preset"; exit 1;; esac
     [[ -n "$BIT_DEPTH" ]] && case "$BIT_DEPTH" in 8|10|16) ;; *) log_error "Depth: 8/10/16"; exit 1;; esac
-    [[ -n "$UHDR_ACTION" ]] && case "$UHDR_ACTION" in detect|strip|extract|decode|info) ;; *) log_error "UHDR: detect/strip/extract/decode/info"; exit 1;; esac
+    [[ -n "$UHDR_ACTION" ]] && case "$UHDR_ACTION" in detect|strip|extract|decode|info|convert|convert-preserve|convert-regen) ;; *) log_error "UHDR: detect/strip/extract/decode/info/convert/convert-preserve/convert-regen"; exit 1;; esac
+    [[ -n "$UHDR_GAINMAP_QUALITY" ]] && { [[ "$UHDR_GAINMAP_QUALITY" =~ ^[0-9]+$ ]] && [[ "$UHDR_GAINMAP_QUALITY" -ge 1 && "$UHDR_GAINMAP_QUALITY" -le 100 ]] || { log_error "--uhdr-gainmap-quality must be 1..100"; exit 1; }; }
+    # Ultra HDR is JPEG-only format → force output format (prevents skip-existing mismatch)
+    case "$UHDR_ACTION" in
+        convert|convert-preserve|convert-regen)
+            [[ "$OUTPUT_FORMAT" != "jpeg" ]] && { log_warn "UHDR $UHDR_ACTION forces JPEG output (requested: $OUTPUT_FORMAT)"; OUTPUT_FORMAT="jpeg"; } ;;
+    esac
     [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip|clean) ;; *) log_error "DJI: detect/export/privacy-strip/clean"; exit 1;; esac
     [[ -n "$DJI_BURST_GROUP" ]] && case "$DJI_BURST_GROUP" in first|all|skip) ;; *) log_error "DJI burst-group: first/all/skip"; exit 1;; esac
     if [[ -n "$DJI_LUT" && "$DJI_LUT" != "none" ]]; then
@@ -2158,7 +2482,7 @@ main() {
                         echo -e "  ${YELLOW}Profil anulat — continuam cu configurare manuala.${NC}"
                         # Reset to defaults (paths raman cele din Paths)
                         OUTPUT_FORMAT="avif"; QUALITY=80; QUALITY_PRESET=""; RESIZE=""; CROP_RATIO=""
-                        HDR_MODE="auto"; UHDR_ACTION=""; DJI_ACTION=""; DJI_BURST_GROUP=""; DJI_LUT=""
+                        HDR_MODE="auto"; UHDR_ACTION=""; UHDR_GAINMAP_QUALITY=""; DJI_ACTION=""; DJI_BURST_GROUP=""; DJI_LUT=""
                         STRIP_EXIF="false"; SRGB_CONVERT="false"; WATERMARK_TEXT=""
                     else
                         log_info "Profil incarcat."

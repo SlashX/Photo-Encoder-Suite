@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.5
+  Photo Encoder Suite v4.6
   Samsung / Google / iPhone / DJI • Ultra HDR
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
@@ -44,6 +44,7 @@ CUPRINS
   ──────────────────────────────────────────────────────────────
   tools/photo_build_ultrahdr.sh    — Script compilare libultrahdr (Termux, optional)
   tools/photo_build_ultrahdr.ps1   — Script compilare libultrahdr (Windows, optional)
+  tools/photo_build_libheif.ps1    — Script build libheif via vcpkg (Windows, optional)
 
   CONFIGURARE (src/profiles/)
   ───────────────────────────
@@ -82,9 +83,15 @@ OPTIONAL (recomandat):
     Termux: pkg install libjpeg-turbo
     Windows: https://mozjpeg.codelove.de/binaries.html
 
-  - libultrahdr       (ultrahdr_app — decodare completa Ultra HDR)
+  - libultrahdr       (ultrahdr_app — decodare completa Ultra HDR +
+                       conversie HEIC → Ultra HDR JPEG)
     Compileaza cu: ./tools/photo_build_ultrahdr.sh (Termux)
                    .\tools\photo_build_ultrahdr.ps1 (Windows)
+
+  - libheif           (heif-convert — conversie HEIC HDR → Ultra HDR JPEG)
+    Termux:  pkg install libheif -y
+    Debian:  apt install libheif-examples
+    Windows: .\tools\photo_build_libheif.ps1 (vcpkg + Visual Studio)
 
 
 ═══════════════════════════════════════════════════════════════
@@ -322,20 +329,66 @@ Ultra HDR = JPEG cu gain map incorporat. Dispozitive care genereaza:
   - Google Pixel 7/8/9: Ultra HDR
   - Apple iPhone 14/15/16: Adaptive HDR (ISO 21496-1)
 
-5 actiuni disponibile:
-  --uhdr detect    Detecteaza UHDR, afiseaza tip (fara conversie)
-  --uhdr info      Info detaliat: version, gain map size, HDR capacity
-  --uhdr strip     Sterge gain map → JPEG mai mic, SDR only
-  --uhdr extract   Extrage gain map ca imagine separata (_gainmap.jpg)
-  --uhdr decode    Decodare COMPLETA cu libultrahdr → HDR real 10-bit
-                   (necesita ultrahdr_app — compilat cu photo_build_ultrahdr)
+8 actiuni disponibile:
+  --uhdr detect            Detecteaza UHDR, afiseaza tip (fara conversie)
+  --uhdr info              Info detaliat: version, gain map size, HDR capacity
+  --uhdr strip             Sterge gain map → JPEG mai mic, SDR only
+  --uhdr extract           Extrage gain map ca imagine separata (_gainmap.jpg)
+  --uhdr decode            Decodare COMPLETA cu libultrahdr → HDR real 10-bit
+                           (necesita ultrahdr_app)
+  --uhdr convert           HEIC Samsung/Apple HDR → Ultra HDR JPEG (auto-hybrid:
+                           preserve gainmap OEM first, fallback regenerate)
+  --uhdr convert-preserve  Forteaza pastrarea gainmap-ului OEM din HEIC
+                           (Samsung Super HDR ISO 21496-1 sau Apple aux HDR)
+  --uhdr convert-regen     Regenereaza gainmap din pixeli HDR 10-bit (P010)
+                           — source-agnostic, orice HEIC HDR
+
+  --uhdr-gainmap-quality <N>  Quality JPEG pentru gainmap (1-100, optional)
+                              default: formula clamp(base_quality - 5, 60, 90)
 
 Default (fara --uhdr): auto-detect, avertizare, converteste baza SDR normal.
+
+Comportament pe foldere mixte (--uhdr convert*):
+  HEIC/HEIF      → convertit (libheif + libultrahdr)
+  UHDR JPG       → copiat ca-atare (pastreaza gainmap-ul intact; niciun
+                   re-encode care ar distruge datele HDR)
+  JPG non-UHDR   → skip (contor dedicat: "Skipped (non-UHDR)")
+  alte formate   → skip
+Stats afiseaza separat: Converted (preserve/regen), Copied (UHDR JPG),
+Skipped (non-UHDR), Convert failed.
+
+Dependente pentru convert modes (per-mod, hard deps):
+
+  --uhdr convert           libheif + ffmpeg + libultrahdr + exiftool
+                           (auto-hybrid: are nevoie de preserve + regen fallback)
+  --uhdr convert-preserve  libheif + libultrahdr + exiftool
+                           (nu necesita ffmpeg — nu extragem pixeli)
+  --uhdr convert-regen     ffmpeg + libultrahdr + exiftool
+                           (nu necesita libheif — regeneram din pixeli P010)
+
+  Instalare dependente:
+  - libheif (heif-convert):
+      Termux:  pkg install libheif -y
+      Debian:  apt install libheif-examples
+      Windows: .\src\tools\photo_build_libheif.ps1 (vcpkg)
+  - ffmpeg:
+      Termux:  pkg install ffmpeg -y
+      Debian:  apt install ffmpeg
+      Windows: drop ffmpeg.exe langa photo_encoder.ps1 (portable)
+  - libultrahdr (ultrahdr_app):
+      compilat cu photo_build_ultrahdr.sh / .ps1
+  - exiftool:
+      Termux:  pkg install exiftool -y
+      Windows: https://exiftool.org
 
 Exemple:
   photo_encoder.sh -i ./DCIM -o ./out --uhdr detect
   photo_encoder.sh -i ./DCIM -o ./stripped -f jpeg --uhdr strip
   photo_encoder.sh -i ./DCIM -o ./hdr -f avif --uhdr decode --depth 10
+  photo_encoder.sh -i ./HEIC -o ./UHDR --uhdr convert -q 90
+  photo_encoder.sh -i ./HEIC -o ./UHDR --uhdr convert-preserve -q 95
+  photo_encoder.sh -i ./HEIC -o ./UHDR --uhdr convert-regen -q 90 \
+                  --uhdr-gainmap-quality 85
 
 
 ═══════════════════════════════════════════════════════════════
@@ -428,7 +481,7 @@ Feature                          SH (Termux)    PS1 (PowerShell)
 Conversie batch                  ✓              ✓
 Quality presets                  ✓              ✓
 HDR detect + tonemap             ✓              ✓
-Ultra HDR (5 actiuni)            ✓              ✓
+Ultra HDR (8 actiuni)            ✓              ✓
 DJI (detect/export/clean/strip)  ✓              ✓
 DJI burst-group filter           ✓              ✓
 Perceptual duplicates (pHash)    ✓              ✓

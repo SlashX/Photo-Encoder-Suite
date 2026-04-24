@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.5 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.6 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -25,7 +25,8 @@ param(
     [ValidateSet("","8","10","16")][string]$Depth = "",
     [switch]$ForceSdr,
     [switch]$ForceHdr,
-    [ValidateSet("","detect","info","strip","extract","decode")][string]$UHDR = "",
+    [ValidateSet("","detect","info","strip","extract","decode","convert","convert-preserve","convert-regen")][string]$UHDR = "",
+    [int]$UHDRGainmapQuality = 0,
     [ValidateSet("","detect","export","privacy-strip","clean")][string]$DJI = "",
     [ValidateSet("","first","all","skip")][string]$DJIBurstGroup = "",
     [string]$DjiLut = "",
@@ -60,7 +61,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.5"
+$Version = "4.6"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -128,6 +129,7 @@ if ($InteractiveMode) {
                 if ($Quality)          { $Quality = [int]$Quality }
                 if ($WatermarkOpacity) { $WatermarkOpacity = [int]$WatermarkOpacity }
                 if ($MinRes)           { $MinRes = [int]$MinRes }
+                if ($UHDRGainmapQuality) { $UHDRGainmapQuality = [int]$UHDRGainmapQuality }
                 if ($HdrMode -eq "force-sdr") { $ForceSdr = $true }
                 if ($HdrMode -eq "force-hdr") { $ForceHdr = $true }
                 if ($SkipSimilarThreshold) { $SkipSimilarThreshold = [int]$SkipSimilarThreshold }
@@ -157,7 +159,7 @@ if ($InteractiveMode) {
                     Write-Host "  Profil anulat — continuam cu configurare manuala." -ForegroundColor Yellow
                     # Reset to defaults
                     $Format = "avif"; $Quality = 80; $Preset = ""; $Resize = ""; $Crop = ""
-                    $ForceSdr = $false; $ForceHdr = $false; $UHDR = ""; $DJI = ""; $DjiLut = ""
+                    $ForceSdr = $false; $ForceHdr = $false; $UHDR = ""; $UHDRGainmapQuality = 0; $DJI = ""; $DjiLut = ""
                     $StripExif = $false; $SRGB = $false; $WatermarkText = ""
                 } else {
                     Write-Host "  Profile loaded.`n" -ForegroundColor Green
@@ -224,6 +226,7 @@ if ($Profile) {
                     "--dji-burst-group" { $DJIBurstGroup = $tokens[++$i] }
                     "--dji-lut"        { $DjiLut = $tokens[++$i] }
                     "--uhdr"           { $UHDR = $tokens[++$i] }
+                    "--uhdr-gainmap-quality" { $UHDRGainmapQuality = [int]$tokens[++$i] }
                     "--dng-preview"    { $DngPreview = $true }
                     "--watermark-text" { $WatermarkText = $tokens[++$i] }
                     "--watermark-image" { $WatermarkImage = $tokens[++$i] }
@@ -281,10 +284,56 @@ if (Test-Path $LocalFfmpeg -PathType Leaf) {
 }
 $HasFfmpeg = [bool]$FfmpegPath
 
-if ($UHDR -eq "decode" -and -not $HasUhdrApp) {
-    Write-Host "[ERROR] ultrahdr_app not found. Required for --uhdr decode." -ForegroundColor Red
-    Write-Host "[ERROR] Build from: https://github.com/google/libultrahdr" -ForegroundColor Red
+if ($UHDR -in "decode","convert","convert-preserve","convert-regen" -and -not $HasUhdrApp) {
+    Write-Host "[ERROR] ultrahdr_app not found. Required for -UHDR $UHDR." -ForegroundColor Red
+    Write-Host "[ERROR] Build: .\tools\photo_build_ultrahdr.ps1" -ForegroundColor Red
     exit 1
+}
+
+# libheif (heif-convert) — required for UHDR convert modes (HEIC extraction + aux images)
+$HeifConvertPath = $null
+$LocalHeifConvert = Join-Path $ScriptDir "heif-convert.exe"
+if (Test-Path $LocalHeifConvert -PathType Leaf) {
+    $HeifConvertPath = $LocalHeifConvert
+} else {
+    $cmd = Get-Command "heif-convert" -ErrorAction SilentlyContinue
+    if ($cmd) { $HeifConvertPath = $cmd.Source }
+}
+$HasHeifConvert = [bool]$HeifConvertPath
+
+# UHDR convert dependency checks — per-mode (convert needs everything, preserve skips ffmpeg, regen skips heif-convert)
+if ($UHDR -in "convert","convert-preserve") {
+    if (-not $HasHeifConvert) {
+        Write-Host "[ERROR] heif-convert (libheif) not found — required for -UHDR $UHDR." -ForegroundColor Red
+        Write-Host "        Build: .\tools\photo_build_libheif.ps1" -ForegroundColor Red
+        Write-Host "        Or:    winget install strukturag.libheif" -ForegroundColor Red
+        exit 1
+    }
+}
+if ($UHDR -in "convert","convert-regen") {
+    if (-not $HasFfmpeg) {
+        Write-Host "[ERROR] ffmpeg not found — required for HEIC -> P010 extraction (-UHDR $UHDR)." -ForegroundColor Red
+        exit 1
+    }
+}
+if ($UHDR -in "convert","convert-preserve","convert-regen") {
+    if (-not $HasExiftool) {
+        Write-Host "[ERROR] exiftool not found — required for metadata transfer (-UHDR $UHDR)." -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($UHDRGainmapQuality -ne 0 -and ($UHDRGainmapQuality -lt 1 -or $UHDRGainmapQuality -gt 100)) {
+    Write-Host "[ERROR] -UHDRGainmapQuality must be 1..100" -ForegroundColor Red
+    exit 1
+}
+
+# Ultra HDR is JPEG-only format → force output format (prevents skip-existing / $OutExt mismatch)
+if ($UHDR -in "convert","convert-preserve","convert-regen") {
+    if ($Format -ne "jpeg" -and $Format -ne "jpg") {
+        Write-Host "[WARN] -UHDR $UHDR forces JPEG output (requested: $Format)" -ForegroundColor Yellow
+        $Format = "jpeg"
+    }
 }
 
 if ($DjiLut -and $DjiLut.ToLower() -ne "none") {
@@ -343,6 +392,7 @@ if ($MotionShareable -and -not $HasFfmpeg -and -not $MotionShareableStrict) {
 
 $Stats = @{ TotalIn=[long]0; TotalOut=[long]0; Dupes=0; SimilarSkip=0; MinResSkip=0; Lossless=0
             HdrDet=0; HdrTM=0; HdrPR=0; UhdrDet=0; UhdrStrip=0; UhdrExtract=0; UhdrDecode=0
+            UhdrConvertPreserve=0; UhdrConvertRegen=0; UhdrConvertFail=0; UhdrConvertCopied=0; UhdrConvertSkipped=0
             DjiDet=0; DjiExport=0; DjiLive=0; DjiStrip=0; DjiClean=0; DjiCleanSaved=[long]0; DjiBurstGroups=0; DjiBurstSkipped=0; SkipExist=0
             DjiDLogDet=0; DjiLutApplied=0; DjiLutSkipped=0
             DngDet=0; DngJxl=0; DngFailed=0; DngPreview=0
@@ -563,6 +613,146 @@ function Decode-UHDRFull([string]$In, [string]$Out) {
         return $true
     }
     return $false
+}
+
+function Get-GainmapQuality {
+    if ($UHDRGainmapQuality -gt 0) { return $UHDRGainmapQuality }
+    $g = $EffQ - 5
+    if ($g -lt 60) { $g = 60 }
+    if ($g -gt 90) { $g = 90 }
+    return $g
+}
+
+function Detect-HeicGainmap([string]$Path) {
+    if (-not $HasExiftool) { return "none" }
+    $xmp = & exiftool -s3 -XMP-hdrgm:all "$Path" 2>$null
+    if ($xmp) { return "iso21496" }
+    $iso = & exiftool -s3 -XMP-GainMap:all "$Path" 2>$null
+    if ($iso) { return "iso21496" }
+    # Apple Adaptive HDR: aux type must be hdrgainmap (exclude depthmap / disparity portrait aux)
+    $auxType = & exiftool -s3 -AuxiliaryImageType "$Path" 2>$null
+    if ($auxType -and $auxType -match "hdrgainmap") { return "aux" }
+    # Apple-specific HDR markers (no aux type tag, but HDR present)
+    $apple = & exiftool -s3 -HDRGainMapVersion -HDRHeadroom "$Path" 2>$null
+    if ($apple) { return "aux" }
+    return "none"
+}
+
+# Regenerate-mode: HEIC HDR -> P010 via ffmpeg -> ultrahdr_app -a 1 -> Ultra HDR JPEG
+function ConvertTo-UHDRRegenerate([string]$In, [string]$Out) {
+    if (-not $HasUhdrApp)    { Write-Host "[ERROR] ultrahdr_app required" -ForegroundColor Red; return $false }
+    if (-not $HasFfmpeg)     { Write-Host "[ERROR] ffmpeg required for HEIC -> P010" -ForegroundColor Red; return $false }
+    if ($DryRun) { Write-Host "[DRY] UHDR regen: $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out))" -ForegroundColor Cyan; return $true }
+
+    $name = [IO.Path]::GetFileNameWithoutExtension($In)
+    $tmpDir = Join-Path $env:TEMP "uhdr_regen_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+
+    try {
+        $dims = & magick identify -format "%wx%h" "$In" 2>$null | Select-Object -First 1
+        if ($dims -notmatch '^(\d+)x(\d+)$') { Write-Host "[FAIL] Cannot read HEIC dims: $([IO.Path]::GetFileName($In))" -ForegroundColor Red; return $false }
+        $w = $Matches[1]; $h = $Matches[2]
+
+        # Bit-depth warning
+        $bps = & exiftool -s3 -BitsPerSample "$In" 2>$null
+        if ($bps -match '^\d+$' -and [int]$bps -lt 10) {
+            Write-Host "  [!] Source appears 8-bit (${bps}bpp) — UHDR regenerate works best with >=10-bit HDR HEIC" -ForegroundColor Yellow
+        }
+
+        $p010 = Join-Path $tmpDir "$name.p010"
+        & $FfmpegPath -y -loglevel error -i "$In" -pix_fmt yuv420p10le -f rawvideo "$p010" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $p010) -or (Get-Item $p010).Length -lt 100) {
+            Write-Host "[FAIL] ffmpeg HEIC -> P010: $([IO.Path]::GetFileName($In))" -ForegroundColor Red
+            return $false
+        }
+
+        $qBase = $EffQ
+        $qGain = Get-GainmapQuality
+        $uhdrOut = Join-Path $tmpDir "$name`_uhdr.jpg"
+
+        & ultrahdr_app -m 0 -p "$p010" -w $w -h $h -a 1 -t 2 -q $qBase -Q $qGain -z "$uhdrOut" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uhdrOut) -or (Get-Item $uhdrOut).Length -lt 100) {
+            Write-Host "[FAIL] ultrahdr_app regen: $([IO.Path]::GetFileName($In))" -ForegroundColor Red
+            return $false
+        }
+
+        $outDir2 = [IO.Path]::GetDirectoryName($Out)
+        if ($outDir2) { New-Item -ItemType Directory -Force -Path $outDir2 | Out-Null }
+        Move-Item -Force $uhdrOut $Out
+
+        # Transfer metadata
+        & exiftool -overwrite_original -TagsFromFile "$In" `
+            -EXIF:all -IPTC:all -XMP:all --XMP-hdrgm:all --XMP-GainMap:all `
+            -Orientation -DateTimeOriginal -GPS:all "$Out" 2>&1 | Out-Null
+
+        $inSz = (Get-Item $In).Length; $outSz = (Get-Item $Out).Length
+        $Stats.TotalIn += $inSz; $Stats.TotalOut += $outSz; $Stats.UhdrConvertRegen++
+        Write-Host "[UHDR] Regen: $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out)) ($(Fmt-Size $inSz) -> $(Fmt-Size $outSz), q=$qBase/g=$qGain)" -ForegroundColor Blue
+        return $true
+    } finally {
+        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Preserve-mode: extract base + aux gainmap via heif-convert -> ultrahdr_app -a 4
+# Returns: $true (success), $false (hard fail), $null (soft fail — caller may fall back)
+function ConvertTo-UHDRPreserve([string]$In, [string]$Out) {
+    if (-not $HasUhdrApp)      { Write-Host "[ERROR] ultrahdr_app required" -ForegroundColor Red; return $false }
+    if (-not $HasHeifConvert)  { Write-Host "[ERROR] heif-convert required" -ForegroundColor Red; return $false }
+
+    $gm = Detect-HeicGainmap $In
+    if ($gm -eq "none") { if ($Verbose) { Write-Host "  [v] No ISO gainmap: $([IO.Path]::GetFileName($In))" -ForegroundColor Gray }; return $null }
+
+    if ($DryRun) { Write-Host "[DRY] UHDR preserve: $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out))" -ForegroundColor Cyan; return $true }
+
+    $name = [IO.Path]::GetFileNameWithoutExtension($In)
+    $tmpDir = Join-Path $env:TEMP "uhdr_preserve_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+
+    try {
+        $baseOut = Join-Path $tmpDir "$name.jpg"
+        & $HeifConvertPath -q 95 --with-aux "$In" "$baseOut" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] heif-convert: $([IO.Path]::GetFileName($In))" -ForegroundColor Red; return $false }
+
+        if (-not (Test-Path $baseOut)) { return $null }
+        $auxFile = Get-ChildItem -Path $tmpDir -Filter "$name-*.jpg" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $auxFile) { if ($Verbose) { Write-Host "  [v] heif-convert: no aux gainmap for $([IO.Path]::GetFileName($In))" -ForegroundColor Gray }; return $null }
+
+        $uhdrOut = Join-Path $tmpDir "$name`_uhdr.jpg"
+        & ultrahdr_app -m 0 -i "$baseOut" -g $auxFile.FullName -z "$uhdrOut" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uhdrOut) -or (Get-Item $uhdrOut).Length -lt 100) {
+            if ($Verbose) { Write-Host "  [v] ultrahdr_app preserve rejected: $([IO.Path]::GetFileName($In))" -ForegroundColor Gray }
+            return $null
+        }
+
+        $outDir2 = [IO.Path]::GetDirectoryName($Out)
+        if ($outDir2) { New-Item -ItemType Directory -Force -Path $outDir2 | Out-Null }
+        Move-Item -Force $uhdrOut $Out
+
+        & exiftool -overwrite_original -TagsFromFile "$In" `
+            -EXIF:all -IPTC:all -XMP:all --XMP-hdrgm:all --XMP-GainMap:all `
+            -Orientation -DateTimeOriginal -GPS:all "$Out" 2>&1 | Out-Null
+
+        $inSz = (Get-Item $In).Length; $outSz = (Get-Item $Out).Length
+        $Stats.TotalIn += $inSz; $Stats.TotalOut += $outSz; $Stats.UhdrConvertPreserve++
+        Write-Host "[UHDR] Preserve: $([IO.Path]::GetFileName($In)) -> $([IO.Path]::GetFileName($Out)) ($(Fmt-Size $inSz) -> $(Fmt-Size $outSz), src=$gm)" -ForegroundColor Blue
+        return $true
+    } finally {
+        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function ConvertTo-UHDRAuto([string]$In, [string]$Out) {
+    $gm = Detect-HeicGainmap $In
+    if ($gm -ne "none") {
+        $res = ConvertTo-UHDRPreserve $In $Out
+        if ($res -eq $true) { return $true }
+        if ($res -eq $false) { $Stats.UhdrConvertFail++; return $false }
+        if ($Verbose) { Write-Host "  [v] Fell through to regenerate: $([IO.Path]::GetFileName($In))" -ForegroundColor Gray }
+    }
+    $r = ConvertTo-UHDRRegenerate $In $Out
+    if (-not $r) { $Stats.UhdrConvertFail++ }
+    return $r
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1102,6 +1292,80 @@ foreach($F in $Files){
             $cm=Find-LiveMOV $F.FullName;if($cm){if(Do-ExtractLive $F.FullName $cm $md){$LiEx++}}else{if(Do-ExtractEmbedded $F.FullName $md){$MoEx++}}}}
     if($MotionOnly){continue}
 
+    # ── UHDR convert (HEIC HDR -> Ultra HDR JPEG) ──────────────────────
+    # HEIC/HEIF -> convert via libheif + libultrahdr
+    # UHDR JPG  -> literal copy preserves existing gainmap (avoid destructive re-encode)
+    # Other     -> skip (would be transcoded to SDR JPEG, losing source data)
+    if ($UHDR -in "convert","convert-preserve","convert-regen") {
+        $iext = $F.Extension.ToLower()
+        $rd = $F.DirectoryName.Replace($InputDir,"").TrimStart("\")
+        $od = if ($Flat -or -not $rd) { $OutputDir } else { Join-Path $OutputDir $rd }
+        if (-not (Test-Path $od)) { New-Item -ItemType Directory -Force -Path $od | Out-Null }
+        $jpgOut = Join-Path $od ("$($Prefix)$([IO.Path]::GetFileNameWithoutExtension($F.Name))$($Suffix).jpg")
+
+        if ($iext -eq ".heic" -or $iext -eq ".heif") {
+            # Respect -Overwrite — Convert-Photo enforces this normally, but UHDR convert short-circuits before it.
+            if ((Test-Path $jpgOut) -and -not $Overwrite) { $Skip++; if ($Verbose) { Write-Host "  [v] Skip UHDR convert (exists, no -Overwrite): $([IO.Path]::GetFileName($jpgOut))" -ForegroundColor Gray }; continue }
+            if ($SkipExisting -and (Test-Path $jpgOut) -and (Get-Item $jpgOut).Length -gt 0) { $Stats.SkipExist++; $Skip++; continue }
+            $ok = $false
+            switch ($UHDR) {
+                "convert"          { $ok = ConvertTo-UHDRAuto $F.FullName $jpgOut }
+                "convert-preserve" {
+                    $res = ConvertTo-UHDRPreserve $F.FullName $jpgOut
+                    if ($res -eq $true) { $ok = $true }
+                    elseif ($res -eq $null) {
+                        Write-Host "  [!] No ISO gainmap in $($F.Name) — convert-preserve skipped (use -UHDR convert for auto-hybrid)" -ForegroundColor Yellow
+                        $Stats.UhdrConvertFail++
+                    }
+                    else { $Stats.UhdrConvertFail++ }
+                }
+                "convert-regen"    {
+                    $ok = ConvertTo-UHDRRegenerate $F.FullName $jpgOut
+                    if (-not $ok) { $Stats.UhdrConvertFail++ }
+                }
+            }
+            if ($ok) { $Conv++ } else { $Fail++ }
+            continue
+        }
+        elseif ($iext -eq ".jpg" -or $iext -eq ".jpeg") {
+            # UHDR JPG pass-through: preserves MPF gainmap and metadata intact
+            $utype = Detect-UHDR $F.FullName
+            if ($utype -ne "none" -and $utype -ne "unknown") {
+                # Respect -Overwrite before touching the destination
+                if ((Test-Path $jpgOut) -and -not $Overwrite) { $Skip++; if ($Verbose) { Write-Host "  [v] Skip UHDR convert (exists, no -Overwrite): $([IO.Path]::GetFileName($jpgOut))" -ForegroundColor Gray }; continue }
+                if ($SkipExisting -and (Test-Path $jpgOut) -and (Get-Item $jpgOut).Length -gt 0) { $Stats.SkipExist++; $Skip++; continue }
+                if ($DryRun) {
+                    Write-Host "[DRY] UHDR JPG pass-through: $($F.Name) -> $([IO.Path]::GetFileName($jpgOut))" -ForegroundColor Cyan
+                    $Stats.UhdrConvertCopied++
+                    $Conv++
+                    continue
+                }
+                try {
+                    Copy-Item -Force -Path $F.FullName -Destination $jpgOut -ErrorAction Stop
+                    $Stats.UhdrConvertCopied++
+                    $Conv++
+                    if ($Verbose) { Write-Host "  [v] UHDR JPG copied (gainmap preserved): $($F.Name) [$utype]" -ForegroundColor Gray }
+                } catch {
+                    Write-Host "  [!] Failed to copy UHDR JPG: $($F.Name) — $_" -ForegroundColor Red
+                    $Stats.UhdrConvertFail++
+                    $Fail++
+                }
+                continue
+            } else {
+                $Stats.UhdrConvertSkipped++
+                $Skip++
+                if ($Verbose) { Write-Host "  [v] Skip UHDR convert (non-UHDR JPG): $($F.Name)" -ForegroundColor Gray }
+                continue
+            }
+        }
+        else {
+            $Stats.UhdrConvertSkipped++
+            $Skip++
+            if ($Verbose) { Write-Host "  [v] Skip UHDR convert (not HEIC/UHDR-JPG): $($F.Name)" -ForegroundColor Gray }
+            continue
+        }
+    }
+
     # ── UHDR handling ─────────────────────────────────────────────────
     $isUhdr = $false
     if ($UhdrExts -contains $F.Extension.ToLower()) {
@@ -1334,6 +1598,7 @@ if ($InteractiveMode -and -not $DryRun) {
                 "Depth=$Depth"
                 "HdrMode=$hdrModeVal"
                 "UHDR=$UHDR"
+                "UHDRGainmapQuality=$UHDRGainmapQuality"
                 "DJI=$DJI"
                 "DNGPreview=$($DngPreview.ToString().ToLower())"
                 "StripExif=$($StripExif.ToString().ToLower())"
@@ -1383,11 +1648,17 @@ if($Stats.MinResSkip -gt 0){Write-Host "    Below min-res: $($Stats.MinResSkip)"
 if($Stats.SkipExist -gt 0){Write-Host "    Already converted: $($Stats.SkipExist)" -ForegroundColor Gray}
 if($Stats.Lossless -gt 0){Write-Host "  Lossless optimized: $($Stats.Lossless)" -ForegroundColor Green}
 if($TM -gt 0){Write-Host "  Motion videos: $TM (Samsung/Google: $MoEx, iPhone: $LiEx)" -ForegroundColor Green}
-if($Stats.UhdrDet -gt 0){
-    Write-Host "  Ultra HDR: $($Stats.UhdrDet) detected" -ForegroundColor Blue
+$UhdrAny = $Stats.UhdrDet + $Stats.UhdrConvertPreserve + $Stats.UhdrConvertRegen + $Stats.UhdrConvertCopied + $Stats.UhdrConvertSkipped + $Stats.UhdrConvertFail
+if($UhdrAny -gt 0){
+    if($Stats.UhdrDet -gt 0){Write-Host "  Ultra HDR: $($Stats.UhdrDet) detected" -ForegroundColor Blue}
     if($Stats.UhdrStrip -gt 0){Write-Host "    Stripped: $($Stats.UhdrStrip)"}
     if($Stats.UhdrExtract -gt 0){Write-Host "    Gain maps: $($Stats.UhdrExtract)"}
     if($Stats.UhdrDecode -gt 0){Write-Host "    Decoded HDR: $($Stats.UhdrDecode)"}
+    if($Stats.UhdrConvertPreserve -gt 0){Write-Host "    Converted (preserve): $($Stats.UhdrConvertPreserve)" -ForegroundColor Green}
+    if($Stats.UhdrConvertRegen -gt 0){Write-Host "    Converted (regen): $($Stats.UhdrConvertRegen)" -ForegroundColor Green}
+    if($Stats.UhdrConvertCopied -gt 0){Write-Host "    Copied (UHDR JPG): $($Stats.UhdrConvertCopied)" -ForegroundColor Green}
+    if($Stats.UhdrConvertSkipped -gt 0){Write-Host "    Skipped (non-UHDR): $($Stats.UhdrConvertSkipped)" -ForegroundColor Gray}
+    if($Stats.UhdrConvertFail -gt 0){Write-Host "    Convert failed: $($Stats.UhdrConvertFail)" -ForegroundColor Red}
 }
 if($Stats.HdrDet -gt 0){Write-Host "  Classic HDR: $($Stats.HdrDet) (tonemapped: $($Stats.HdrTM), preserved: $($Stats.HdrPR))" -ForegroundColor Magenta}
 if($Stats.DjiDet -gt 0){
