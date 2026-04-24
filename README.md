@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
 
-> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.6
+> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.6.1
 
 ---
 
@@ -244,4 +244,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.6** — 11 files | 29 predefined profiles | bash/PS1 cross-platform
+Current: **v4.6.1** — 11 files | 29 predefined profiles | bash/PS1 cross-platform

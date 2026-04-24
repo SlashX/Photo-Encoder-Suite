@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.6 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.6.1 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -61,7 +61,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.6"
+$Version = "4.6.1"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────

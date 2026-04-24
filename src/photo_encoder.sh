@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="4.6"
+VERSION="4.6.1"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 INPUT_DIR="/storage/emulated/0/Media/InputPhotos"

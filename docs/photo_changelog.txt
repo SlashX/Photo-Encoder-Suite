@@ -3,6 +3,17 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.6.1 — Visual Studio 2026 support (libheif builder)
+───────────────────────────────────────────────────────────────
+  ADD photo_build_libheif.ps1 — suport Visual Studio 2026 (v18) pe langa
+    2019 / 2022; scan automat sub "Microsoft Visual Studio\<year>" —
+    functioneaza si pe versiuni viitoare fara modificari
+  UPDATE detectia alege anul cel mai recent intre toate root-urile
+    (x64 + x86), nu pe root first-match — evita regresia in scenarii
+    mixte (ex: x64/2019 + x86/2022 -> alege corect 2022)
+  UPDATE synopsis + mesajul de eroare mentioneaza 2019/2022/2026
+
+
   v4.6 — HEIC HDR → Ultra HDR JPEG conversion (Samsung/Apple/generic)
 ───────────────────────────────────────────────────────────────
   ADD --uhdr convert — auto-hybrid HEIC HDR → Ultra HDR JPEG (ISO 21496-1)

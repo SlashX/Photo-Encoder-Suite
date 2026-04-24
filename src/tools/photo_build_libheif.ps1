@@ -2,7 +2,7 @@
 .SYNOPSIS
     photo_build_libheif.ps1 — Compileaza libheif pe Windows (vcpkg)
 .DESCRIPTION
-    Necesita: Visual Studio 2019+ (cu C++ workload), CMake, Git
+    Necesita: Visual Studio 2019/2022/2026 (cu C++ workload), CMake, Git
     Produce:  heif-convert.exe, heif-info.exe, libheif.dll
 
     vcpkg e cea mai simpla ruta pe Windows — gestioneaza automat dependintele
@@ -38,24 +38,32 @@ if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# Detecteaza Visual Studio
+# Detecteaza Visual Studio (2019 / 2022 / 2026). Scan auto — functioneaza si pe
+# versiuni viitoare; afiseaza anul detectat, vcpkg auto-detecteaza toolchain-ul.
 $VsGenerator = $null
-$VsPaths = @(
-    "C:\Program Files\Microsoft Visual Studio\2022",
-    "C:\Program Files (x86)\Microsoft Visual Studio\2022",
-    "C:\Program Files\Microsoft Visual Studio\2019",
-    "C:\Program Files (x86)\Microsoft Visual Studio\2019"
+$VsGenMap = @{
+    "2019" = "Visual Studio 16 2019"
+    "2022" = "Visual Studio 17 2022"
+    "2026" = "Visual Studio 18 2026"
+}
+$VsRoots = @(
+    "C:\Program Files\Microsoft Visual Studio",
+    "C:\Program Files (x86)\Microsoft Visual Studio"
 )
-foreach ($p in $VsPaths) {
-    if (Test-Path $p) {
-        if ($p -match "2022") { $VsGenerator = "Visual Studio 17 2022" }
-        else { $VsGenerator = "Visual Studio 16 2019" }
-        break
-    }
+$FoundYears = @()
+foreach ($root in $VsRoots) {
+    if (-not (Test-Path $root)) { continue }
+    $FoundYears += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match '^\d{4}$' } |
+                   ForEach-Object { $_.Name }
+}
+if ($FoundYears.Count -gt 0) {
+    $year = ($FoundYears | Sort-Object -Unique -Descending | Select-Object -First 1)
+    $VsGenerator = if ($VsGenMap.ContainsKey($year)) { $VsGenMap[$year] } else { "Visual Studio $year" }
 }
 
 if (-not $VsGenerator) {
-    Write-Host "[ERROR] Visual Studio 2019 sau 2022 nu e instalat." -ForegroundColor Red
+    Write-Host "[ERROR] Visual Studio 2019, 2022 sau 2026 nu e instalat." -ForegroundColor Red
     Write-Host "  Download: https://visualstudio.microsoft.com/downloads/" -ForegroundColor Yellow
     Write-Host '  Selecteaza "Desktop development with C++" la instalare.' -ForegroundColor Yellow
     Read-Host "Apasa Enter pentru a inchide"
