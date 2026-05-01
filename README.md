@@ -1,8 +1,8 @@
 # Photo Encoder Suite
 
-**Cross-platform photo encoding suite (bash/PS1) for Termux (Android) and Windows**
+**Cross-platform photo encoding suite (bash/PS1) for Termux (Android), Linux, macOS and Windows**
 
-> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.6.1
+> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.7
 
 ---
 
@@ -34,6 +34,8 @@
 | Platform | Scripts | Requirements |
 |----------|---------|--------------|
 | **Termux (Android)** | `.sh` (bash) | ImageMagick 7.x, ExifTool (optional) |
+| **Linux** | `.sh` (bash 4+) | ImageMagick 7.x via `apt`/`dnf`/`pacman`, ExifTool (optional) |
+| **macOS** | `.sh` (bash 4+) | `brew install bash imagemagick exiftool` |
 | **Windows** | `.ps1` (PowerShell) | ImageMagick 7.x, PowerShell 5.1+ |
 
 ---
@@ -43,15 +45,16 @@
 ```
 Photo-Encoder-Suite/
 ├── src/
-│   ├── photo_launcher.sh           # Interactive menu — 10 options (Termux)
-│   ├── photo_encoder.sh            # Main conversion engine (Termux)
-│   ├── photo_check.sh              # Media analysis + 54-field CSV (Termux)
+│   ├── photo_common.sh             # Cross-platform foundation (NEW v4.7) — sourced by all .sh
+│   ├── photo_launcher.sh           # Interactive menu — 10 options (Termux/Linux/macOS)
+│   ├── photo_encoder.sh            # Main conversion engine (Termux/Linux/macOS)
+│   ├── photo_check.sh              # Media analysis + 54-field CSV (Termux/Linux/macOS)
 │   ├── photo_encoder.ps1           # Main conversion engine (Windows)
 │   ├── photo_check.ps1             # Media analysis + 54-field CSV (Windows)
 │   ├── profiles/
 │   │   └── photo_profiles.conf         # 27 predefined profiles
 │   └── tools/
-│       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux, optional)
+│       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux/Linux/macOS, optional)
 │       ├── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
 │       └── photo_build_libheif.ps1     # libheif build via vcpkg (Windows, optional)
 ├── docs/
@@ -73,6 +76,34 @@ pkg update -y
 pkg install imagemagick -y                       # required
 pkg install perl -y && cpan Image::ExifTool      # recommended
 pkg install libjpeg-turbo -y                     # optional (lossless JPEG)
+pkg install libheif -y                           # optional (Ultra HDR convert modes)
+pkg install ffmpeg -y                            # optional (motion shareable, dji-lut, uhdr convert-regen)
+```
+
+### Linux (Debian / Ubuntu / Fedora / Arch)
+
+```bash
+# Debian / Ubuntu
+sudo apt install bash imagemagick libimage-exiftool-perl libheif-examples ffmpeg
+
+# Fedora
+sudo dnf install bash ImageMagick perl-Image-ExifTool libheif-tools ffmpeg
+
+# Arch Linux
+sudo pacman -S bash imagemagick perl-image-exiftool libheif ffmpeg
+```
+
+### macOS
+
+```bash
+# Required: bash 4+ (Apple ships bash 3.2)
+brew install bash
+
+# Required: ImageMagick
+brew install imagemagick
+
+# Optional but recommended
+brew install exiftool libheif ffmpeg
 ```
 
 ### Windows
@@ -94,8 +125,22 @@ pkg install libjpeg-turbo -y                     # optional (lossless JPEG)
 chmod +x src/*.sh src/tools/*.sh
 
 # Folder structure: tools/ and profiles/ subfolders are auto-detected
+# (folders for InputPhotos / OutputPhotos / UserProfiles live under
+#  /storage/emulated/0/Media/ — unchanged behavior)
 
 # Launch interactive menu
+cd src
+./photo_launcher.sh
+```
+
+### Linux / macOS
+
+```bash
+# Set execute permissions
+chmod +x src/*.sh src/tools/*.sh
+
+# Launch interactive menu — InputPhotos/OutputPhotos/UserProfiles/luts/profiles
+# are auto-created next to the script (parity with Windows PS1).
 cd src
 ./photo_launcher.sh
 ```
@@ -212,16 +257,28 @@ apt install libheif-examples             # Debian/Ubuntu
 
 ---
 
+## Cross-platform bash (v4.7)
+
+The bash side runs on **Termux (Android), Linux, and macOS** from a single codebase.
+
+- `photo_common.sh` is sourced at the top of every `.sh` file and handles platform detection (`uname -s` + Termux discriminator), path resolution, GNU vs BSD command differences (`stat`, `sed -i`, `mktemp`, `readlink -f`, `grep -P`, `date`, `du`, `df`), wake-lock / notify / open-folder wrappers, and per-OS install hints.
+- **Termux paths are unchanged** — `/storage/emulated/0/Media/InputPhotos`, etc. Existing users see zero migration.
+- **Linux / macOS** auto-create `InputPhotos/`, `OutputPhotos/`, `UserProfiles/`, `luts/`, `profiles/`, `tools/` next to the launcher script (parity with Windows PS1 `$PSScriptRoot`).
+- `bash 4+` is required — macOS ships bash 3.2 by default; install a modern bash with `brew install bash`.
+- Notification at the end of large batches (`termux-notification` / `notify-send` / `osascript`).
+- Optional "Open output folder?" prompt at end of run (`termux-open` / `xdg-open` / `open`).
+
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
 | `Permission denied` on `.sh` | `chmod +x src/*.sh src/tools/*.sh` — profiles/ folder is read-only |
-| `magick: command not found` | `pkg install imagemagick -y` (Termux) or install ImageMagick (Windows) |
+| `magick: command not found` | Termux: `pkg install imagemagick`; Linux: `apt/dnf/pacman install imagemagick`; macOS: `brew install imagemagick` |
+| `bash: bad substitution` on macOS | Apple's bash 3.2 — install bash 4+: `brew install bash` |
 | PS1 script blocked | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
 | HEIC output not working | ImageMagick compiled without libheif — script auto-falls back to AVIF |
 | JXL output not working | ImageMagick compiled without libjxl — script auto-falls back to AVIF |
-| UHDR decode not working | Build libultrahdr with `./tools/photo_build_ultrahdr.sh` |
+| UHDR decode/convert not working | Build libultrahdr with `./tools/photo_build_ultrahdr.sh` (cross-platform) |
 | DJI GPS export empty | Image not filmed with GPS-enabled DJI RC or DJI Mimo app |
 
 ---
@@ -244,4 +301,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.6.1** — 11 files | 29 predefined profiles | bash/PS1 cross-platform
+Current: **v4.7** — 12 files | 29 predefined profiles | bash (Termux/Linux/macOS) + PS1 (Windows)

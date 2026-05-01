@@ -1,25 +1,45 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # ============================================================================
 # photo_check.sh — Analiza completa fisiere foto + export CSV
 # ============================================================================
 # Analizeaza: EXIF, camera, HDR, Ultra HDR, DJI, GPS, Motion Photo
 # Genereaza: CSV cu 50+ campuri + display terminal + recomandari
+# Cross-platform: Termux (Android), Linux, macOS.
 # Requires: ImageMagick
 # Optional: exiftool (recomandat — fara el, analiza e limitata)
 # ============================================================================
 
 set -euo pipefail
 
-VERSION="1.0"
+VERSION="1.1"
+
+# ── Cross-platform foundation (detect_platform, paths, wrappers) ────────────
+# Rezolva symlinks (cross-platform: GNU + BSD readlink, single-hop loop)
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _dir="$(cd "$(dirname "$_self")" && pwd)"
+    _self="$(readlink "$_self")"
+    [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+PHOTO_SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+COMMON_PATH="$PHOTO_SCRIPT_DIR/photo_common.sh"
+unset _self _dir
+if [[ ! -f "$COMMON_PATH" ]]; then
+    echo "[ERROR] photo_common.sh nu a fost gasit langa photo_check: $COMMON_PATH" >&2
+    exit 1
+fi
+# shellcheck source=photo_common.sh
+source "$COMMON_PATH"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
+# (definite si in photo_common.sh; redeclarate local pentru standalone clarity)
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
-OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
+# INPUT_DIR/OUTPUT_DIR setate de photo_common.sh (Termux unchanged,
+# Linux/macOS = $PHOTO_SCRIPT_DIR/...).
 CSV_FILE="${OUTPUT_DIR}/photo_check_report.csv"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -43,7 +63,8 @@ check_dependencies() {
 
     command -v exiftool &>/dev/null && HAS_EXIFTOOL="true" || {
         echo -e "${YELLOW}[WARN]${NC} exiftool not found. Analiza va fi limitata (doar ImageMagick)."
-        echo -e "${YELLOW}[WARN]${NC} Install: pkg install exiftool -y"
+        echo -e "${YELLOW}[WARN]${NC} Install:"
+        photo_pkg_install_hint exiftool perl exiftool libimage-exiftool-perl perl-Image-ExifTool perl-image-exiftool
     }
 }
 

@@ -3,6 +3,103 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.7 — Cross-platform bash (Linux + macOS support)
+───────────────────────────────────────────────────────────────
+  BREAKING shebang `#!/data/data/com.termux/files/usr/bin/bash`
+    -> `#!/usr/bin/env bash` in toate cele 4 fisiere .sh
+    (zero impact functional pe Termux — bash-ul gasit prin PATH)
+  BREAKING utilizatorii Termux trebuie sa copieze NOUL src/photo_common.sh
+    langa scripturile existente (in $HOME sau /storage/emulated/0/Media/
+    Scripts/, oriunde sunt cele 3 scripturi existente). Fara el, scripturile
+    fail-uiesc cu eroarea "photo_common.sh nu a fost gasit langa launcher".
+    Path-urile Termux raman identice (/storage/emulated/0/Media/...) — zero
+    migrare de fisiere video / profile / LUTs.
+
+  ADD src/photo_common.sh — fundatie cross-platform pentru toate
+    scripturile .sh (435+ linii, source-uit la inceputul fiecarui script):
+    - detect_platform() — termux / linux / macos via uname -s + check
+      /data/data/com.termux (discriminator Termux vs Linux desktop)
+    - PHOTO_PLATFORM, PHOTO_IS_TERMUX, PHOTO_OS_LABEL exportate global
+    - PHOTO_SCRIPT_DIR auto-rezolvat din BASH_SOURCE; daca caller e in
+      tools/, urca un nivel ca paths sa rezolve la src/
+    - photo_resolve_paths():
+        Termux  -> path-uri actuale (/storage/emulated/0/Media/...) ZERO
+                  schimbare pentru utilizatorii actuali
+        Linux+  -> $PHOTO_SCRIPT_DIR/InputPhotos, OutputPhotos, profiles,
+        macOS    UserProfiles, luts, tools (paritate cu PS1 $PSScriptRoot)
+    - 13 wrappere GNU vs BSD: photo_nproc, photo_stat_size, photo_stat_mtime,
+      photo_sed_inplace, photo_readlink_f, photo_mktemp_dir, photo_mktemp_ext,
+      photo_grep_perl, photo_date_to_epoch, photo_du_mb, photo_df_kb
+    - 4 wrappere platform-API: photo_wake_lock, photo_wake_unlock,
+      photo_notify_done, photo_open_path (Termux: termux-*; Linux:
+      systemd-inhibit / notify-send / xdg-open; macOS: caffeinate /
+      osascript / open)
+    - photo_pkg_install_hint <pkg> [termux] [brew] [apt] [dnf] [pacman] —
+      mesaj de instalare adaptat per OS si package manager (apt/dnf/pacman/
+      zypper auto-detect pe Linux)
+    - photo_print_os_banner — afiseaza la pornire ("macOS 14.5 Apple Silicon
+      — bash 5.2")
+    - bash 4+ check la pornire (refuz pe macOS 3.2 cu hint brew install bash)
+    - photo_has_imagemagick / exiftool / ffmpeg / heif_convert / ultrahdr_app
+      / jpegtran / python3 — tool detection helpers
+    - photo_magick_cmd — returneaza "magick" (v7) sau "convert" (v6) dupa
+      disponibilitate
+    - color codes (RED/GREEN/YELLOW/CYAN/...) + log helpers (log_info /
+      log_warn / log_error / log_success / log_dry / log_verbose)
+    - idempotent: PHOTO_COMMON_LOADED guard previne re-definire la
+      re-source
+
+  ADD launcher auto-detect SCRIPT_DIR pe Linux/macOS — promptul interactiv
+    "1) Termux ($HOME) / 2) Folder Android" se afiseaza DOAR pe Termux;
+    pe Linux/macOS scriptul porneste direct in meniu folosind
+    $PHOTO_SCRIPT_DIR. OS banner afisat la pornire.
+
+  ADD photo_notify_done la finalul batch-ului in encoder — notifica utilizatorul
+    cand un batch >=10 conversii s-a terminat (Termux: termux-notification;
+    Linux: notify-send; macOS: osascript; silent daca daemon lipseste)
+
+  ADD launcher prompt "Deschid folderul output? (d/N)" la finalul fiecarei
+    rulari (cross-platform: termux-open / xdg-open / open)
+
+  ADD $TOOLS_DIR/bin/ prepend la PATH la sourcing common.sh — encoder gaseste
+    automat ultrahdr_app instalat local de photo_build_ultrahdr.sh pe
+    Linux/macOS (paritate cu PS1 unde ultrahdr_app.exe sta langa scripturi)
+
+  UPDATE photo_build_ultrahdr.sh — cross-platform complet:
+    Termux  -> pkg install (existent, neschimbat)
+    macOS   -> brew install cmake/ninja/jpeg-turbo + Xcode CLI Tools check
+    Linux   -> detect apt/dnf/pacman si afiseaza comanda exacta de instalat
+              (refuza inainte de build daca lipseste o dependenta)
+    Install -> Termux: $PREFIX/bin/ultrahdr_app
+               Linux/macOS: $TOOLS_DIR/bin/ultrahdr_app (langa scripturi)
+
+  UPDATE toate mesajele "pkg install ..." din encoder/check sunt routate
+    prin photo_pkg_install_hint — utilizatorul vede comanda corecta pentru
+    OS-ul lui (Termux: pkg / macOS: brew / Linux: apt|dnf|pacman|zypper
+    auto-detect). Acopera: imagemagick, exiftool, libheif, ffmpeg, libjxl
+
+  UPDATE README.md — tagline v4.7 cu Linux + macOS, tabel platforme extins,
+    sectiune noua "Cross-platform bash (v4.7)"
+
+  UPDATE docs/photo_info.txt — sectiuni noi PASUL Linux + PASUL macOS cu
+    pasi Homebrew + apt/dnf/pacman; nota pe arhitectura cross-platform
+    (photo_common.sh + path resolution per platforma)
+
+  UPDATE photo_check.sh -> v1.1 (source common, paths cross-platform,
+    install hint adaptat); photo_encoder.sh ramane v4.7
+
+  ADD symlink resolve in toate cele 4 scripturi — daca launcher / encoder /
+    photo_check / photo_build_ultrahdr e symlink-uit (pattern uzual pe
+    Linux: ~/photo_launcher.sh -> /repo/src/photo_launcher.sh), single-hop
+    readlink loop rezolva calea reala inainte de a cauta photo_common.sh.
+    Functioneaza cu GNU readlink si BSD readlink (Linux/macOS).
+
+  TESTED Sourcing + wrapper smoke test pe MINGW64 (uname=MINGW64_NT,
+    fallback la branch-ul linux — paths rezolvate corect, 26 functii
+    photo_* incarcate, idempotent la re-source). Symlink resolve verificat
+    static pe ambele cazuri (link / direct invocation).
+
+
   v4.6.1 — Visual Studio 2026 support (libheif builder)
 ───────────────────────────────────────────────────────────────
   ADD photo_build_libheif.ps1 — suport Visual Studio 2026 (v18) pe langa

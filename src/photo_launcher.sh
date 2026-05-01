@@ -1,34 +1,53 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # ============================================================================
 # photo_launcher.sh — Meniu Interactiv Photo Encoder
 # ============================================================================
 # Lanseaza photo_encoder.sh cu parametri selectati din meniu.
 # Acelasi concept ca launcher.sh (FFmpeg) dar pentru poze.
+# Cross-platform: Termux (Android), Linux, macOS.
 # ============================================================================
 
 set -euo pipefail
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Cross-platform foundation (detect_platform, paths, wrappers) ────────────
+# Rezolva symlinks (cross-platform: GNU + BSD readlink, single-hop loop)
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _dir="$(cd "$(dirname "$_self")" && pwd)"
+    _self="$(readlink "$_self")"
+    [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+PHOTO_SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+COMMON_PATH="$PHOTO_SCRIPT_DIR/photo_common.sh"
+unset _self _dir
+if [[ ! -f "$COMMON_PATH" ]]; then
+    echo "[ERROR] photo_common.sh nu a fost gasit langa launcher: $COMMON_PATH" >&2
+    exit 1
+fi
+# shellcheck source=photo_common.sh
+source "$COMMON_PATH"
+
+# ── Paths Termux-only (folosite doar pe Termux pentru promptul director) ────
 TERMUX_DIR="$HOME"
 ANDROID_DIR="/storage/emulated/0/Media/Scripts"
-INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
-OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
-TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
-PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
 
-# ── Colors ───────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
-WHITE='\033[1;37m'; GRAY='\033[0;90m'; BLUE='\033[0;34m'; NC='\033[0m'
-
-# ── Director scripturi ────────────────────────────────────────────────────
-echo ""
-echo -e "De unde vrei sa rulezi scripturile?"
-echo -e "  ${GREEN}1)${NC} Termux ($TERMUX_DIR)"
-echo -e "  ${GREEN}2)${NC} Folder Android ($ANDROID_DIR)"
-read -p "Introdu 1 sau 2: " location_choice
-if   [[ "$location_choice" == "1" ]]; then SCRIPT_DIR="$TERMUX_DIR"
-elif [[ "$location_choice" == "2" ]]; then SCRIPT_DIR="$ANDROID_DIR"
-else echo "Optiune invalida. Iesi..."; exit 1; fi
+# ── Director scripturi ──────────────────────────────────────────────────────
+# Pe Termux pastram alegerea interactiva (utilizatorii actuali pot rula
+# scripturile din $HOME sau din /storage/emulated/0/Media/Scripts).
+# Pe Linux/macOS auto-detectam din locatia launcher-ului.
+if [[ "$PHOTO_PLATFORM" == "termux" ]]; then
+    echo ""
+    echo -e "De unde vrei sa rulezi scripturile?"
+    echo -e "  ${GREEN}1)${NC} Termux ($TERMUX_DIR)"
+    echo -e "  ${GREEN}2)${NC} Folder Android ($ANDROID_DIR)"
+    read -rp "Introdu 1 sau 2: " location_choice
+    if   [[ "$location_choice" == "1" ]]; then SCRIPT_DIR="$TERMUX_DIR"
+    elif [[ "$location_choice" == "2" ]]; then SCRIPT_DIR="$ANDROID_DIR"
+    else echo "Optiune invalida. Iesi..."; exit 1; fi
+else
+    SCRIPT_DIR="$PHOTO_SCRIPT_DIR"
+    photo_print_os_banner
+fi
 
 for script in photo_encoder.sh photo_check.sh; do
     if [[ ! -f "$SCRIPT_DIR/$script" ]]; then
@@ -236,12 +255,24 @@ run_command() {
     echo -e "  ${YELLOW}S)${NC} Dry-run (doar analiza, fara conversie)"
     echo -e "  ${RED}N)${NC} Anuleaza"
     echo ""
-    read -p "  Alege [D/s/n, implicit=D]: " confirm
+    read -rp "  Alege [D/s/n, implicit=D]: " confirm
+    local _was_dryrun="false"
+    local _ran="false"
     case "${confirm,,}" in
         n) echo -e "${YELLOW}  Anulat.${NC}" ;;
-        s) eval "$cmd --dry-run" ;;
-        *) eval "$cmd" ;;
+        s) _was_dryrun="true"; _ran="true"; eval "$cmd --dry-run" ;;
+        *) _ran="true"; eval "$cmd" ;;
     esac
+
+    # ── Open output folder offer (cross-platform) ────────────────────────────
+    if [[ "$_ran" == "true" && "$_was_dryrun" == "false" && -d "$OUTPUT_DIR" ]] \
+        && declare -F photo_open_path &>/dev/null; then
+        echo ""
+        read -rp "  Deschid folderul output? (d/N) [N]: " _open_ans
+        if [[ "${_open_ans,,}" == "d" ]]; then
+            photo_open_path "$OUTPUT_DIR"
+        fi
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

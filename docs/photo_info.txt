@@ -1,6 +1,7 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.6.1
+  Photo Encoder Suite v4.7
   Samsung / Google / iPhone / DJI • Ultra HDR
+  Cross-platform: Termux (Android), Linux, macOS, Windows
   Documentatie Setup & Utilizare
 ═══════════════════════════════════════════════════════════════
 
@@ -10,6 +11,8 @@ CUPRINS
   1. Structura proiectului
   2. Cerinte de sistem
   3. Setup Termux (Android)
+  3a. Setup Linux (Debian / Ubuntu / Fedora / Arch)
+  3b. Setup macOS
   4. Setup Windows
   5. Structura foldere
   6. Flux conversie — cum functioneaza
@@ -21,16 +24,21 @@ CUPRINS
  12. Utilizare rapida (comenzi pornire)
  13. Comenzi rapide Termux (edit, backup, stergere)
  14. Troubleshooting
+ 15. Cross-platform bash (v4.7)
 
 
 ═══════════════════════════════════════════════════════════════
 1. STRUCTURA PROIECTULUI
 ═══════════════════════════════════════════════════════════════
 
-10 fisiere totale:
+12 fisiere totale:
 
-  TERMUX / LINUX (Bash)
-  ─────────────────────
+  CROSS-PLATFORM (Termux / Linux / macOS) — Bash
+  ──────────────────────────────────────────────
+  photo_common.sh            — Fundatie cross-platform (NEW v4.7)
+                                source-uit la inceputul fiecarui script .sh
+                                detect_platform, paths, wrappere GNU/BSD,
+                                wake-lock, notify, open-folder, install hints
   photo_launcher.sh          — Meniu interactiv (10 optiuni, 0-9)
   photo_encoder.sh           — Engine conversie (toate features-urile)
   photo_check.sh             — Analiza completa foto + CSV 54 campuri + find-duplicates
@@ -130,6 +138,88 @@ Pasul 5 — Ruleaza
   $ bash photo_launcher.sh
   sau direct:
   $ bash photo_encoder.sh -i /sdcard/DCIM/Camera -o /sdcard/Media/OutputPhotos -f avif -p web
+
+
+═══════════════════════════════════════════════════════════════
+3a. SETUP LINUX (Debian / Ubuntu / Fedora / Arch)
+═══════════════════════════════════════════════════════════════
+
+Pasul 1 — Instaleaza dependintele cu package manager-ul distributiei
+
+  Debian / Ubuntu:
+    sudo apt update
+    sudo apt install bash imagemagick libimage-exiftool-perl
+    sudo apt install libheif-examples ffmpeg              # optional (UHDR convert / motion)
+    sudo apt install libjxl-tools libjpeg-turbo-progs     # optional (JXL, jpegtran)
+
+  Fedora:
+    sudo dnf install bash ImageMagick perl-Image-ExifTool
+    sudo dnf install libheif-tools ffmpeg
+    sudo dnf install libjxl-utils libjpeg-turbo-utils
+
+  Arch:
+    sudo pacman -S bash imagemagick perl-image-exiftool
+    sudo pacman -S libheif ffmpeg libjxl libjpeg-turbo
+
+Pasul 2 — Copiaza scripturile
+  git clone <repo>  sau extrage src/ intr-un folder la alegere
+  Folderele InputPhotos/ OutputPhotos/ UserProfiles/ luts/ vor fi create
+  automat langa scripturi (paritate cu PS1 Windows).
+
+Pasul 3 — Permisiuni
+  $ chmod +x src/*.sh src/tools/*.sh
+
+Pasul 4 — Ruleaza
+  $ cd src
+  $ ./photo_launcher.sh
+
+  La pornire, scriptul afiseaza banner cu OS detectat
+  (ex: "[OS] Ubuntu 24.04.1 LTS — bash 5.2") si intra direct in meniu.
+
+Pasul 5 (optional) — libultrahdr pentru --uhdr decode/convert
+  $ ./tools/photo_build_ultrahdr.sh
+  Binarul ultrahdr_app va fi instalat in src/tools/bin/ si va fi gasit
+  automat de photo_encoder.sh la urmatoarea pornire.
+
+
+═══════════════════════════════════════════════════════════════
+3b. SETUP macOS
+═══════════════════════════════════════════════════════════════
+
+Pasul 1 — Instaleaza Homebrew (daca nu il ai)
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+Pasul 2 — IMPORTANT: bash 4+ (Apple ofera bash 3.2 default!)
+  $ brew install bash
+  Daca ai shell zsh (default macOS) e OK — scripturile incep cu
+  shebang #!/usr/bin/env bash care gaseste bash-ul brew automat
+  (PATH-ul brew adauga /opt/homebrew/bin sau /usr/local/bin in fata).
+
+Pasul 3 — Dependinte minime
+  $ brew install imagemagick
+  $ brew install exiftool                        # optional (recomandat)
+  $ brew install libheif ffmpeg                  # optional (UHDR / motion)
+  $ brew install jpeg-turbo                      # optional (lossless JPEG)
+
+Pasul 4 — Xcode CLI Tools (pentru photo_build_ultrahdr.sh)
+  $ xcode-select --install
+
+Pasul 5 — Copiaza scripturile si seteaza permisiuni
+  $ chmod +x src/*.sh src/tools/*.sh
+
+Pasul 6 — Ruleaza
+  $ cd src
+  $ ./photo_launcher.sh
+  Banner-ul OS arata "[OS] macOS 14.5 (Apple Silicon) — bash 5.2"
+
+Pasul 7 (optional) — libultrahdr
+  $ brew install cmake ninja
+  $ ./tools/photo_build_ultrahdr.sh
+  ultrahdr_app va fi instalat in src/tools/bin/ (langa scripturi).
+
+Pe macOS Apple Silicon (M1/M2/M3+) brew instaleaza in /opt/homebrew/.
+Pe Intel Mac instaleaza in /usr/local/. Scripturile gasesc binare
+prin PATH automat — niciun ajustaj manual nu e necesar.
 
 
 ═══════════════════════════════════════════════════════════════
@@ -660,5 +750,84 @@ Verifica dependinte:
 15. ffmpeg remux esueaza — [SHARE FALLBACK]
     → Video-ul embedded poate fi corupt sau cu timestamp neregulat.
     → Extract-ul raw este pastrat (nu se pierde nimic), dar fara faststart.
+
+
+═══════════════════════════════════════════════════════════════
+15. CROSS-PLATFORM BASH (v4.7)
+═══════════════════════════════════════════════════════════════
+
+Toate cele 4 fisiere .sh ruleaza nativ pe Termux (Android), Linux si macOS
+dintr-un singur codebase. Layer-ul comun e in src/photo_common.sh — sourced
+la inceputul fiecarui script.
+
+DETECT PLATFORM
+  uname -s + check /data/data/com.termux distinge:
+    - termux  (Android via Termux)
+    - linux   (orice distributie)
+    - macos   (Darwin / Apple Silicon sau Intel)
+  Variabile globale: PHOTO_PLATFORM, PHOTO_IS_TERMUX, PHOTO_OS_LABEL
+
+PATH RESOLUTION
+  Termux  -> path-uri actuale, neschimbate (zero migrare):
+    /storage/emulated/0/Media/InputPhotos
+    /storage/emulated/0/Media/OutputPhotos
+    /storage/emulated/0/Media/UserProfiles
+    /storage/emulated/0/Media/Scripts/{tools,profiles,luts}
+  Linux + macOS -> langa scriptul launcher-ului (paritate PS1):
+    $PHOTO_SCRIPT_DIR/InputPhotos
+    $PHOTO_SCRIPT_DIR/OutputPhotos
+    $PHOTO_SCRIPT_DIR/UserProfiles
+    $PHOTO_SCRIPT_DIR/{tools,profiles,luts}
+
+WRAPPERE COMENZI DIVERGENTE (GNU vs BSD)
+  photo_nproc          - sysctl hw.ncpu (BSD/macOS) | nproc (GNU/Linux)
+  photo_stat_size      - stat -f%z (BSD)            | stat -c%s (GNU)
+  photo_stat_mtime     - stat -f%m (BSD)            | stat -c%Y (GNU)
+  photo_sed_inplace    - sed -i '' (BSD)            | sed -i (GNU)
+  photo_readlink_f     - greadlink/python fallback  | readlink -f (GNU)
+  photo_mktemp_dir     - mktemp -d (universal)
+  photo_mktemp_ext     - mktemp + mv .ext (BSD)     | mktemp --suffix (GNU)
+  photo_grep_perl      - ggrep/pcregrep/grep -E     | grep -P (GNU)
+  photo_date_to_epoch  - date -j -f (BSD)           | date -d (GNU)
+  photo_du_mb          - du -sk + awk /1024 (BSD)   | du -sm (GNU)
+  photo_df_kb          - df -Pk (POSIX, both)
+
+WRAPPERE PLATFORM-API
+  photo_wake_lock / photo_wake_unlock
+    Termux: termux-wake-lock / termux-wake-unlock
+    Linux:  systemd-inhibit (background process)
+    macOS:  caffeinate -i (background process)
+  photo_notify_done
+    Termux: termux-notification
+    Linux:  notify-send
+    macOS:  osascript display notification
+  photo_open_path
+    Termux: termux-open
+    Linux:  xdg-open
+    macOS:  open
+
+INSTALL HINTS
+  photo_pkg_install_hint <pkg> [...] afiseaza comanda corecta de instalare:
+    Termux:  pkg install <pkg>
+    macOS:   brew install <pkg>
+    Linux:   sudo apt|dnf|pacman|zypper install <pkg> (auto-detect)
+
+BASH 4+ CHECK
+  Refuza pornirea pe macOS bash 3.2 cu hint clar "brew install bash".
+  Necesar pentru: declare -A (asociative arrays), mapfile, ${var^^}.
+
+OS BANNER
+  La pornire pe Linux/macOS, launcher-ul afiseaza o linie cu OS-ul detectat
+  si versiunea de bash (ex: "[OS] macOS 14.5 (Apple Silicon) — bash 5.2").
+  Pe Termux promptul existent "1) Termux / 2) Folder Android" e pastrat.
+
+NOTIFICATIONS LA FINAL BATCH
+  Pentru batch-uri >= 10 conversii reusite, encoder-ul trimite notificare
+  cu sumar (numar / durata). Silent daca utilizatorul nu are daemon notify.
+
+OPEN OUTPUT FOLDER
+  La finalul fiecarei rulari din launcher (cu exceptia dry-run), prompt
+  interactiv "Deschid folderul output? (d/N)". Cross-platform.
+
 
 ═══════════════════════════════════════════════════════════════

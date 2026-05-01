@@ -1,6 +1,6 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # ============================================================================
-# photo_encoder.sh v4.5 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.7 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -8,21 +8,35 @@
 # HDR:      Auto detect, tone map HDR→SDR, preserve HDR, bit depth (8/10/16)
 # UHDR:     Ultra HDR / Super HDR / Adaptive HDR (gain map)
 # DJI:      Photo detection, metadata export, privacy strip, 4K Live Photo
+# Cross-platform: Termux (Android), Linux, macOS.
 # Requires: ImageMagick
-# Optional: exiftool, jpegtran/mozjpeg, libultrahdr (ultrahdr_app)
+# Optional: exiftool, jpegtran/mozjpeg, libultrahdr (ultrahdr_app), libheif
 # ============================================================================
 
 set -euo pipefail
 
-VERSION="4.6.1"
+VERSION="4.7"
 
-# ── Paths ───────────────────────────────────────────────────────────────────
-INPUT_DIR="/storage/emulated/0/Media/InputPhotos"
-OUTPUT_DIR="/storage/emulated/0/Media/OutputPhotos"
-TOOLS_DIR="/storage/emulated/0/Media/Scripts/tools"
-PROFILES_DIR="/storage/emulated/0/Media/Scripts/profiles"
-USER_PROFILES_DIR="/storage/emulated/0/Media/UserProfiles"
-LUTS_DIR="/storage/emulated/0/Media/Scripts/luts"
+# ── Cross-platform foundation (detect_platform, paths, wrappers) ────────────
+# Rezolva symlinks (cross-platform: GNU + BSD readlink, single-hop loop)
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _dir="$(cd "$(dirname "$_self")" && pwd)"
+    _self="$(readlink "$_self")"
+    [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+PHOTO_SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+COMMON_PATH="$PHOTO_SCRIPT_DIR/photo_common.sh"
+unset _self _dir
+if [[ ! -f "$COMMON_PATH" ]]; then
+    echo "[ERROR] photo_common.sh nu a fost gasit langa encoder: $COMMON_PATH" >&2
+    exit 1
+fi
+# shellcheck source=photo_common.sh
+source "$COMMON_PATH"
+# photo_common.sh seteaza INPUT_DIR/OUTPUT_DIR/TOOLS_DIR/PROFILES_DIR/
+# USER_PROFILES_DIR/LUTS_DIR — Termux pastreaza locatiile actuale, Linux/macOS
+# rezolva relativ la directorul scriptului ($PHOTO_SCRIPT_DIR).
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
@@ -258,7 +272,9 @@ is_uhdr_candidate() { local e="${1##*.}"; e="${e,,}"; for u in $UHDR_EXTENSIONS;
 
 check_dependencies() {
     if ! command -v magick &>/dev/null && ! command -v convert &>/dev/null; then
-        log_error "ImageMagick not found. Install: pkg install imagemagick"; exit 1
+        log_error "ImageMagick not found. Install:"
+        photo_pkg_install_hint imagemagick imagemagick imagemagick imagemagick imagemagick imagemagick
+        exit 1
     fi
     command -v magick &>/dev/null && MAGICK_CMD="magick" || MAGICK_CMD="convert"
     IDENTIFY_CMD="${MAGICK_CMD/convert/identify}"
@@ -266,7 +282,8 @@ check_dependencies() {
 
     command -v exiftool &>/dev/null && HAS_EXIFTOOL="true" || {
         log_warn "exiftool not found. UHDR detection and EXIF transfer limited."
-        log_warn "Install: pkg install exiftool -y"
+        log_warn "Install:"
+        photo_pkg_install_hint exiftool perl exiftool libimage-exiftool-perl perl-Image-ExifTool perl-image-exiftool
     }
 
     command -v ultrahdr_app &>/dev/null && HAS_ULTRAHDR_APP="true" || {
@@ -289,8 +306,8 @@ check_dependencies() {
         convert|convert-preserve)
             if [[ "$HAS_HEIF_CONVERT" != "true" ]]; then
                 log_error "heif-convert (libheif) not found. Required for --uhdr ${UHDR_ACTION}."
-                log_error "Install: pkg install libheif -y (Termux) / apt install libheif-examples (Debian)"
-                log_error "Windows: run .\\tools\\photo_build_libheif.ps1"
+                log_error "Install:"
+                photo_pkg_install_hint libheif libheif libheif libheif-examples libheif-tools libheif
                 exit 1
             fi ;;
     esac
@@ -298,7 +315,8 @@ check_dependencies() {
         convert|convert-regen)
             if [[ "$HAS_FFMPEG" != "true" ]]; then
                 log_error "ffmpeg not found. Required for --uhdr ${UHDR_ACTION} (HEIC → P010 extraction)."
-                log_error "Install: pkg install ffmpeg -y (Termux) / apt install ffmpeg (Debian)"
+                log_error "Install:"
+                photo_pkg_install_hint ffmpeg
                 exit 1
             fi ;;
     esac
@@ -306,6 +324,8 @@ check_dependencies() {
         convert|convert-preserve|convert-regen)
             if [[ "$HAS_EXIFTOOL" != "true" ]]; then
                 log_error "exiftool not found. Required for --uhdr ${UHDR_ACTION} (metadata transfer)."
+                log_error "Install:"
+                photo_pkg_install_hint exiftool perl exiftool libimage-exiftool-perl perl-Image-ExifTool perl-image-exiftool
                 exit 1
             fi ;;
     esac
@@ -601,7 +621,8 @@ check_heic_output_support() {
         local test_file="/tmp/heic_test_$$.heic"
         $MAGICK_CMD -size 1x1 xc:black "$test_file" 2>/dev/null || {
             log_warn "ImageMagick cannot write HEIC. libheif may be missing."
-            log_warn "Termux: pkg install libheif -y"
+            log_warn "Install libheif:"
+            photo_pkg_install_hint libheif libheif libheif libheif-dev libheif-devel libheif
             log_warn "Falling back to AVIF format."
             OUTPUT_FORMAT="avif"
         }
@@ -612,7 +633,8 @@ check_heic_output_support() {
         local test_file="/tmp/jxl_test_$$.jxl"
         $MAGICK_CMD -size 1x1 xc:black "$test_file" 2>/dev/null || {
             log_warn "ImageMagick cannot write JPEG XL. libjxl may be missing."
-            log_warn "Termux: pkg install libjxl -y"
+            log_warn "Install libjxl:"
+            photo_pkg_install_hint libjxl libjxl libjxl libjxl-tools libjxl libjxl
             log_warn "Falling back to AVIF format."
             OUTPUT_FORMAT="avif"
         }
@@ -1285,7 +1307,7 @@ resolve_lut_path() {
 # Returns 1 on error (echoes nothing).
 apply_dji_lut() {
     local input="$1" lut_name="$2"
-    [[ "$HAS_FFMPEG" != "true" ]] && { log_error "ffmpeg required for --dji-lut (install: pkg install ffmpeg)"; return 1; }
+    [[ "$HAS_FFMPEG" != "true" ]] && { log_error "ffmpeg required for --dji-lut. Install:"; photo_pkg_install_hint ffmpeg; return 1; }
     local lut_path; lut_path=$(resolve_lut_path "$lut_name") || { log_error "LUT not found: $lut_name (searched $LUTS_DIR)"; return 1; }
 
     local tmp="${TMPDIR:-/tmp}/dji_lut_$$_$(date +%s%N).png"
@@ -2324,6 +2346,12 @@ process_files() {
     echo -e "  Output: ${WHITE}${output_dir}${NC}"
     echo -e "${CYAN}════════════════════════════════════════════════════════════════${NC}"
     echo ""
+
+    # ── Cross-platform notify (silent daca utilizatorul nu are notify daemon) ─
+    # Trimite doar pentru batch-uri non-triviale.
+    if [[ "$DRY_RUN" != "true" && $converted -ge 10 ]] && declare -F photo_notify_done &>/dev/null; then
+        photo_notify_done "Photo Encoder" "Batch complet: ${converted} convertite din ${total} ($(format_duration $dur))"
+    fi
 }
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
@@ -2404,7 +2432,7 @@ validate_args() {
     [[ -n "$DJI_ACTION" ]] && case "$DJI_ACTION" in detect|export|privacy-strip|clean) ;; *) log_error "DJI: detect/export/privacy-strip/clean"; exit 1;; esac
     [[ -n "$DJI_BURST_GROUP" ]] && case "$DJI_BURST_GROUP" in first|all|skip) ;; *) log_error "DJI burst-group: first/all/skip"; exit 1;; esac
     if [[ -n "$DJI_LUT" && "$DJI_LUT" != "none" ]]; then
-        [[ "$HAS_FFMPEG" != "true" ]] && { log_error "--dji-lut requires ffmpeg (install: pkg install ffmpeg)"; exit 1; }
+        [[ "$HAS_FFMPEG" != "true" ]] && { log_error "--dji-lut requires ffmpeg. Install:"; photo_pkg_install_hint ffmpeg; exit 1; }
         if [[ "$DJI_LUT" != "auto" ]]; then
             resolve_lut_path "$DJI_LUT" >/dev/null || { log_error "LUT not found: ${DJI_LUT}.cube in ${LUTS_DIR}"; exit 1; }
         fi
