@@ -2,7 +2,7 @@
 
 **Cross-platform photo encoding suite (bash/PS1) for Termux (Android), Linux, macOS and Windows**
 
-> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.7
+> Batch photo converter with Ultra HDR (incl. HEIC HDR → UHDR JPEG conversion), DJI metadata, D-Log 3D LUT grading, Motion Photo extraction + shareable remux, 29 presets and profile system — v4.8
 
 ---
 
@@ -18,7 +18,8 @@
 - **Perceptual duplicates**: `--skip-similar` during conversion + `--find-duplicates` in photo_check (dHash 64-bit, Hamming distance)
 - **29 predefined profiles**: instagram, facebook, whatsapp, web-gallery, archive, dji-web, dji-clean, dji-web-lut, dji-archive-lut, print-a4, max-avif, motion-share and more
 - **6 quality presets**: web, social, archive, print, max (transparent quality), thumb (thumbnails)
-- **Profile system**: save/load full config as `.conf` files (cross-platform KEY=VALUE)
+- **Profile system**: save/load full config as `.conf` files (cross-platform KEY=VALUE) — with **schema validation, diff tool, and template generator** (v4.8)
+- **Test suite** (v4.8): `tests/run_tests.sh` / `run_tests.ps1` — assertion framework + unit & integration tests (skip elegant when deps missing)
 - **Auto-preset suggestion**: detects input resolution, recommends optimal preset
 - **Compare mode**: per-file size comparison (original → output, ratio, savings)
 - **Dry-run mode**: preview batch without converting
@@ -45,18 +46,27 @@
 ```
 Photo-Encoder-Suite/
 ├── src/
-│   ├── photo_common.sh             # Cross-platform foundation (NEW v4.7) — sourced by all .sh
+│   ├── photo_common.sh             # Cross-platform foundation + profile schema/validation (v4.8)
+│   ├── photo_profile_lib.ps1       # PS1 mirror of profile schema/validation (NEW v4.8)
 │   ├── photo_launcher.sh           # Interactive menu — 10 options (Termux/Linux/macOS)
 │   ├── photo_encoder.sh            # Main conversion engine (Termux/Linux/macOS)
 │   ├── photo_check.sh              # Media analysis + 54-field CSV (Termux/Linux/macOS)
 │   ├── photo_encoder.ps1           # Main conversion engine (Windows)
 │   ├── photo_check.ps1             # Media analysis + 54-field CSV (Windows)
 │   ├── profiles/
-│   │   └── photo_profiles.conf         # 27 predefined profiles
+│   │   └── photo_profiles.conf         # 29 predefined profiles
 │   └── tools/
 │       ├── photo_build_ultrahdr.sh     # libultrahdr compiler (Termux/Linux/macOS, optional)
 │       ├── photo_build_ultrahdr.ps1    # libultrahdr compiler (Windows, optional)
-│       └── photo_build_libheif.ps1     # libheif build via vcpkg (Windows, optional)
+│       ├── photo_build_libheif.ps1     # libheif build via vcpkg (Windows, optional)
+│       ├── photo_profile_diff.sh/.ps1  # Diff two profiles (NEW v4.8)
+│       └── photo_profile_template.sh/.ps1  # Generate UserProfiles/_template.conf (NEW v4.8)
+├── tests/                          # Test framework + suites (NEW v4.8)
+│   ├── framework.sh / .ps1         # Assertion library
+│   ├── run_tests.sh / .ps1         # Discovery + runner
+│   ├── unit/                       # Schema, validation, diff, helpers
+│   ├── integration/                # Encode smoke + check_csv
+│   └── fixtures/                   # Synth PNG/JPEG/HEIC samples
 ├── docs/
 │   ├── photo_info.txt              # Full setup & usage documentation
 │   └── photo_changelog.txt         # Version history
@@ -213,6 +223,49 @@ cd src
   - `profiles/` — predefined profiles (`photo_profiles.conf`, read-only, CLI `--profile`)
   - `UserProfiles/` — user-saved profiles (interactive save/load)
 
+### Profile Audit (v4.8)
+
+Schema-aware validation, diff and template generation for both profile formats:
+
+```bash
+# Validate predefined profiles
+bash -c 'source src/photo_common.sh && photo_validate_predefined_profiles src/profiles/photo_profiles.conf'
+
+# Diff two UserProfiles
+bash src/tools/photo_profile_diff.sh UserProfiles/old.conf UserProfiles/new.conf
+
+# Diff two predefined entries
+bash src/tools/photo_profile_diff.sh --predefined instagram facebook
+
+# Generate UserProfiles/_template.conf with all keys + comments
+bash src/tools/photo_profile_template.sh
+```
+
+Windows equivalents (`photo_profile_diff.ps1`, `photo_profile_template.ps1`) ship the same flags.
+On UserProfile load, validation runs automatically — invalid values warn in interactive mode and abort when `PHOTO_NONINTERACTIVE=1` (or `$env:PHOTO_NONINTERACTIVE='1'`).
+
+---
+
+## Testing (v4.8)
+
+```bash
+# Bash (Termux / Linux / macOS)
+bash tests/run_tests.sh                    # all tests
+bash tests/run_tests.sh "test_profile_*"   # filter by name
+
+# PowerShell (Windows)
+pwsh tests/run_tests.ps1
+```
+
+The runner discovers `tests/test_*`, `tests/unit/test_*`, and `tests/integration/test_*`, captures per-test logs in `tests/results/`, and prints a `Pass / Fail / Skip` summary. Tests that need ImageMagick / ExifTool / libheif / sample images skip gracefully (exit 77) instead of failing on systems without those dependencies.
+
+To regenerate fixture images first:
+
+```bash
+bash tests/fixtures/generate_samples.sh        # PNG + JPEG + HEIC (HEIC best-effort)
+pwsh tests/fixtures/generate_samples.ps1
+```
+
 ---
 
 ## DJI Photo Support
@@ -301,4 +354,4 @@ If you find this project useful, consider a small donation — it helps keep the
 
 See [docs/photo_changelog.txt](docs/photo_changelog.txt) for full version history.
 
-Current: **v4.7** — 12 files | 29 predefined profiles | bash (Termux/Linux/macOS) + PS1 (Windows)
+Current: **v4.8** — profile audit system + test suite | 29 predefined profiles | bash (Termux/Linux/macOS) + PS1 (Windows)

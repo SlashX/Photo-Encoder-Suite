@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  Photo Encoder Suite v4.7
+  Photo Encoder Suite v4.8
   Samsung / Google / iPhone / DJI • Ultra HDR
   Cross-platform: Termux (Android), Linux, macOS, Windows
   Documentatie Setup & Utilizare
@@ -25,6 +25,7 @@ CUPRINS
  13. Comenzi rapide Termux (edit, backup, stergere)
  14. Troubleshooting
  15. Cross-platform bash (v4.7)
+ 16. Profile audit + Test suite (v4.8)
 
 
 ═══════════════════════════════════════════════════════════════
@@ -50,9 +51,26 @@ CUPRINS
 
   TOOLS (src/tools/) — Instalere & Compilare dependinte externe
   ──────────────────────────────────────────────────────────────
-  tools/photo_build_ultrahdr.sh    — Script compilare libultrahdr (Termux, optional)
+  tools/photo_build_ultrahdr.sh    — Script compilare libultrahdr (Termux/Linux/macOS, optional)
   tools/photo_build_ultrahdr.ps1   — Script compilare libultrahdr (Windows, optional)
   tools/photo_build_libheif.ps1    — Script build libheif via vcpkg (Windows, optional)
+  tools/photo_profile_diff.sh      — Diff intre doua profile (NEW v4.8)
+  tools/photo_profile_diff.ps1     — Diff intre doua profile (NEW v4.8)
+  tools/photo_profile_template.sh  — Genereaza UserProfiles/_template.conf (NEW v4.8)
+  tools/photo_profile_template.ps1 — Genereaza UserProfiles\_template.conf (NEW v4.8)
+
+  PROFILE LIBRARY (PS1 — sursa pentru schema + validation)
+  ────────────────────────────────────────────────────────
+  photo_profile_lib.ps1            — Schema + Test-PhotoUserProfile + ... (NEW v4.8)
+                                     dot-source-uit din encoder + teste
+
+  TESTING (tests/) — Framework si suita de teste cross-platform (NEW v4.8)
+  ────────────────────────────────────────────────────────────────────────
+  tests/framework.{sh,ps1}                    — Asserts (assert_eq, assert_match, etc.)
+  tests/run_tests.{sh,ps1}                    — Test runner cu auto-discovery
+  tests/unit/test_*.{sh,ps1}                  — Teste unitare (schema, validation, diff, helpers)
+  tests/integration/test_*.{sh,ps1}           — Teste end-to-end (encode smoke, CSV check)
+  tests/fixtures/generate_samples.{sh,ps1}    — Sintetizeaza sample images via ImageMagick
 
   CONFIGURARE (src/profiles/)
   ───────────────────────────
@@ -828,6 +846,81 @@ NOTIFICATIONS LA FINAL BATCH
 OPEN OUTPUT FOLDER
   La finalul fiecarei rulari din launcher (cu exceptia dry-run), prompt
   interactiv "Deschid folderul output? (d/N)". Cross-platform.
+
+
+═══════════════════════════════════════════════════════════════
+16. PROFILE AUDIT + TEST SUITE (v4.8)
+═══════════════════════════════════════════════════════════════
+
+PROFILE AUDIT
+  Photo are doua formate de profile:
+    1. UserProfiles/*.conf — KEY=VALUE (Format=avif, Quality=80, ...)
+       salvate de save_profile_conf() din meniul interactiv
+    2. profiles/photo_profiles.conf — multi-entry "name = -f x -p y ..."
+       (29 profile predefinite)
+  Schema validation acopera ambele:
+    - photo_profile_schema_get KEY -> "TYPE:CONSTRAINT" pentru ~40 chei
+      UserProfile (enum, bool, int, intrange, regex, string, path)
+    - photo_validate_user_profile FILE — valideaza un fisier KEY=VALUE
+    - photo_validate_predefined_profiles FILE — valideaza fiecare entry
+      din photo_profiles.conf (parseaza flag-bundle, verifica fiecare
+      flag + valoare)
+  PowerShell mirror cu aceeasi semantica in src/photo_profile_lib.ps1:
+    Get-PhotoProfileSchema, Test-PhotoUserProfile, Test-PhotoFlagString,
+    Test-PhotoPredefinedProfiles.
+  Wire-up: cand interactive mode incarca un UserProfile, valideaza
+  intai. Erori = warning in tty, abort cand PHOTO_NONINTERACTIVE=1.
+
+PROFILE DIFF (src/tools/photo_profile_diff.{sh,ps1})
+  Doua moduri:
+    photo_profile_diff a.conf b.conf
+        Diff intre doua UserProfiles (KEY=VALUE).
+    photo_profile_diff --predefined NAME_A NAME_B [--file profiles.conf]
+        Extrage cele doua entries din photo_profiles.conf, le tokenizeaza,
+        raporteaza flag-uri "doar in A", "doar in B", "valori diferite".
+  Exit: 0 identice, 1 difera, 2 eroare. Exit code-ul e util in scripturi.
+
+PROFILE TEMPLATE (src/tools/photo_profile_template.{sh,ps1})
+  Genereaza UserProfiles/_template.conf cu toate cheile cunoscute:
+    - precedate de comentariu cu valorile permise (extras din schema)
+    - cu valoare default (Format=avif, Quality=80, etc.)
+    - comentate cu # — utilizatorul decomenteaza ce vrea sa activeze
+  Idempotent: refuza overwrite fara --force / -Force.
+
+TEST SUITE (tests/)
+  Framework minimal cu asserts si auto-summary:
+    tests/framework.sh   — assert_eq, assert_contains, assert_match,
+                           assert_file_exists, assert_zero/nonzero,
+                           skip_test (exit 77), trap EXIT auto-summary.
+    tests/framework.ps1  — Assert-Eq, Assert-Contains, ..., Skip-Test,
+                           Invoke-TestSummary.
+  Runner cu discovery automat:
+    bash tests/run_tests.sh
+    pwsh tests/run_tests.ps1
+  Discovera test_*.sh / test_*.ps1 in tests/, tests/unit/,
+  tests/integration/. Captureaza log per test, summary cu Pass/Fail/Skip.
+
+  Unit tests (rapide, fara dependinte externe):
+    test_framework_smoke              sanity pe asserts
+    test_profile_schema               schema lookups
+    test_profile_validation_user      KEY=VALUE OK / bad enum / bad range
+    test_profile_validation_predefined photo_profiles.conf valid + flag edges
+    test_profile_diff                 predefined + user mode
+    test_pure_helpers (sh)            wrappere din photo_common
+
+  Integration tests (skip elegant cand deps lipsesc):
+    test_encode_smoke                 PNG -> AVIF end-to-end
+    test_check_csv (sh)               photo_check produce CSV cu >=40 col
+
+  Fixtures:
+    tests/fixtures/generate_samples.sh / .ps1 — sintetizeaza
+    PNG/JPEG via ImageMagick (256x256 gradient, 1024x768 plasma).
+    HEIC best-effort: skip prietenos cand libheif lipseste.
+    Output in tests/fixtures/samples/ (gitignored).
+
+  Skip code: testele care detecteaza dep lipsa (ImageMagick, exiftool,
+  libheif, sample missing) apeleaza skip_test "<reason>" si exit-eaza
+  cu 77. Runner-ul afiseaza ~ name (skip: reason) si nu le numara ca fail.
 
 
 ═══════════════════════════════════════════════════════════════

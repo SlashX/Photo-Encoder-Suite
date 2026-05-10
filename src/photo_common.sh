@@ -380,6 +380,343 @@ photo_magick_cmd() {
     else echo ""; fi
 }
 
+# ============================================================================
+# v4.8 — PROFILE SCHEMA + VALIDATION
+# ============================================================================
+# Photo are doua formate de profile, validate diferit:
+#
+# 1. UserProfiles/*.conf (KEY=VALUE, salvat de save_profile_conf)
+#    -> photo_profile_schema_get + photo_validate_user_profile
+#
+# 2. profiles/photo_profiles.conf (predefinite: name = -flag value -flag ...)
+#    -> photo_validate_predefined_profiles -> tokenize fiecare linie ->
+#       photo_validate_flag_string -> photo_flag_kind + photo_flag_value_schema
+# ============================================================================
+
+# ── 1) UserProfiles schema ──────────────────────────────────────────────────
+# photo_profile_schema_get KEY -> echo "TYPE:CONSTRAINT" or empty if unknown
+#   TYPE:
+#     enum:val1,val2,...   - valoare in lista (empty == "" permis daca apare in lista)
+#     bool:                - true/false (sau empty)
+#     int:                 - numar intreg (sau empty)
+#     intrange:min,max     - numar intreg in interval (sau empty)
+#     regex:pattern        - match pe regex POSIX
+#     string:              - orice (no validation)
+#     path:                - path (existence-check separat)
+photo_profile_schema_get() {
+    case "$1" in
+        # Output format / quality
+        Format)              echo "enum:avif,webp,jpeg,heic,png,jxl" ;;
+        Quality)             echo "intrange:1,100" ;;
+        Preset)              echo "enum:,web,social,archive,print,max,thumb" ;;
+        Resize)              echo "regex:^([0-9]+(x[0-9]+)?)?$" ;;
+        ResizeMode)          echo "enum:,fit,fill,exact" ;;
+        Crop)                echo "regex:^([0-9]+:[0-9]+)?$" ;;
+        MaxSize)             echo "regex:^([0-9]+[kKmMgG]?)?$" ;;
+        Depth)               echo "enum:,8,10,16" ;;
+        HdrMode)             echo "enum:,auto,off,force-sdr,force-hdr" ;;
+        UHDR)                echo "enum:,detect,info,strip,extract,decode,convert,convert-preserve,convert-regen" ;;
+        UHDRGainmapQuality)  echo "intrange:1,100" ;;
+        DJI)                 echo "enum:,detect,export,privacy-strip,clean" ;;
+        DJIBurstGroup)       echo "enum:,first,all,skip" ;;
+        DJILut)              echo "regex:^([A-Za-z0-9_.-]+|auto|none)?$" ;;
+        DNGPreview)          echo "bool:" ;;
+        # EXIF / colour / orientation
+        StripExif)           echo "bool:" ;;
+        SRGB)                echo "bool:" ;;
+        NoAutoRotate)        echo "bool:" ;;
+        # Watermark
+        WatermarkText)       echo "string:" ;;
+        WatermarkImage)      echo "path:" ;;
+        WatermarkPos)        echo "enum:,north,south,east,west,center,northeast,northwest,southeast,southwest" ;;
+        WatermarkOpacity)    echo "intrange:0,100" ;;
+        # Output naming / structure
+        Prefix)              echo "string:" ;;
+        Suffix)              echo "string:" ;;
+        NoRecursive)         echo "bool:" ;;
+        Flat)                echo "bool:" ;;
+        # Filters / dedup
+        MinRes)              echo "regex:^([0-9]+(x[0-9]+)?)?$" ;;
+        SkipDuplicates)      echo "bool:" ;;
+        SkipSimilar)         echo "bool:" ;;
+        SkipSimilarThreshold) echo "intrange:0,64" ;;
+        LosslessJpeg)        echo "bool:" ;;
+        # Motion Photo
+        ExtractMotion)       echo "bool:" ;;
+        MotionOnly)          echo "bool:" ;;
+        MotionShareable)     echo "bool:" ;;
+        MotionShareableStrict) echo "bool:" ;;
+        # Misc
+        SkipExisting)        echo "bool:" ;;
+        Overwrite)           echo "bool:" ;;
+        Verbose)             echo "bool:" ;;
+        Compare)             echo "bool:" ;;
+        # Paths
+        InputDir|OutputDir)  echo "path:" ;;
+        *)                   echo "" ;;
+    esac
+}
+
+# photo_validate_user_profile <file>
+# Echoes errors to stderr (one per line, prefixed "  x ...").
+# Unknown keys -> warning (forward-compat), not error.
+# Returns 0 on success, 1 on any validation error.
+photo_validate_user_profile() {
+    local pf="$1"
+    [[ ! -f "$pf" ]] && { echo "  x Profil inexistent: $pf" >&2; return 1; }
+
+    local errors=0 lineno=0 line key value schema stype sconstraint
+    local IFS_BAK="$IFS"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        lineno=$((lineno+1))
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"?([^\"]*)\"?[[:space:]]*$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            schema=$(photo_profile_schema_get "$key")
+            if [[ -z "$schema" ]]; then
+                echo "  ! [linia $lineno] cheie necunoscuta: $key (ignor)" >&2
+                continue
+            fi
+            stype="${schema%%:*}"
+            sconstraint="${schema#*:}"
+            case "$stype" in
+                enum)
+                    local IFS=','
+                    local allowed=($sconstraint)
+                    IFS="$IFS_BAK"
+                    local ok=0 a
+                    for a in "${allowed[@]}"; do
+                        [[ "$value" == "$a" ]] && { ok=1; break; }
+                    done
+                    if [[ $ok -eq 0 ]]; then
+                        echo "  x [linia $lineno] $key=\"$value\" -- valori permise: $sconstraint" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                bool)
+                    if [[ -n "$value" ]] && [[ "$value" != "true" ]] && [[ "$value" != "false" ]]; then
+                        echo "  x [linia $lineno] $key=\"$value\" -- astept true/false" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                int)
+                    if [[ -n "$value" ]] && ! [[ "$value" =~ ^[0-9]+$ ]]; then
+                        echo "  x [linia $lineno] $key=\"$value\" -- astept intreg" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                intrange)
+                    local rmin="${sconstraint%,*}" rmax="${sconstraint#*,}"
+                    if [[ -n "$value" ]]; then
+                        if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -lt "$rmin" ]] || [[ "$value" -gt "$rmax" ]]; then
+                            echo "  x [linia $lineno] $key=\"$value\" -- astept $rmin..$rmax" >&2
+                            errors=$((errors+1))
+                        fi
+                    fi
+                    ;;
+                regex)
+                    if ! [[ "$value" =~ $sconstraint ]]; then
+                        echo "  x [linia $lineno] $key=\"$value\" -- nu corespunde pattern: $sconstraint" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                path|string)
+                    : # validation deferred / no constraint
+                    ;;
+            esac
+        fi
+    done < "$pf"
+
+    [[ $errors -gt 0 ]] && return 1
+    return 0
+}
+
+# ── 2) Predefined profiles (CLI flag bundles) ───────────────────────────────
+# photo_flag_kind <flag> -> echoes:
+#   "none"          - boolean flag (no value)
+#   "value"         - takes exactly one value
+#   "optional-value" - takes optional value (e.g. --skip-similar [N])
+#   ""              - unknown flag
+photo_flag_kind() {
+    case "$1" in
+        --force-sdr|--force-hdr|--strip-exif|--keep-exif|--srgb|--auto-rotate|--no-auto-rotate)
+            echo "none" ;;
+        --skip-duplicates|--lossless-jpeg|--dng-preview|--skip-existing|--overwrite|--no-recursive|--flat|--compare)
+            echo "none" ;;
+        -m|--extract-motion|--motion-only|--motion-shareable|--motion-shareable-strict)
+            echo "none" ;;
+        -f|--format|-q|--quality|-p|--preset|-r|--resize)
+            echo "value" ;;
+        --max-size|--resize-mode|--crop|--depth)
+            echo "value" ;;
+        --watermark-text|--watermark-image|--watermark-pos|--watermark-opacity)
+            echo "value" ;;
+        --prefix|--suffix|--min-res)
+            echo "value" ;;
+        --dji|--dji-burst-group|--dji-lut|--uhdr|--uhdr-gainmap-quality)
+            echo "value" ;;
+        --skip-similar)
+            echo "optional-value" ;;
+        *)
+            echo "" ;;
+    esac
+}
+
+# photo_flag_value_schema <flag> -> echoes "TYPE:CONSTRAINT" for the value
+# (mirrors photo_profile_schema_get but keyed by CLI flag instead of UserProfile key).
+photo_flag_value_schema() {
+    case "$1" in
+        -f|--format)            echo "enum:avif,webp,jpeg,heic,png,jxl" ;;
+        -q|--quality)           echo "intrange:1,100" ;;
+        -p|--preset)            echo "enum:web,social,archive,print,max,thumb" ;;
+        -r|--resize)            echo "regex:^[0-9]+(x[0-9]+)?$" ;;
+        --max-size)             echo "regex:^[0-9]+[kKmMgG]?$" ;;
+        --resize-mode)          echo "enum:fit,fill,exact" ;;
+        --crop)                 echo "regex:^[0-9]+:[0-9]+$" ;;
+        --depth)                echo "enum:8,10,16" ;;
+        --watermark-pos)        echo "enum:north,south,east,west,center,northeast,northwest,southeast,southwest" ;;
+        --watermark-opacity)    echo "intrange:0,100" ;;
+        --min-res)              echo "regex:^[0-9]+(x[0-9]+)?$" ;;
+        --dji)                  echo "enum:detect,export,privacy-strip,clean" ;;
+        --dji-burst-group)      echo "enum:first,all,skip" ;;
+        --dji-lut)              echo "regex:^[A-Za-z0-9_.-]+$" ;;
+        --uhdr)                 echo "enum:detect,info,strip,extract,decode,convert,convert-preserve,convert-regen" ;;
+        --uhdr-gainmap-quality) echo "intrange:1,100" ;;
+        --skip-similar)         echo "intrange:0,64" ;;
+        # value-bearing flags with no value constraint (free-form strings)
+        --watermark-text|--watermark-image|--prefix|--suffix) echo "string:" ;;
+        *)                      echo "" ;;
+    esac
+}
+
+# photo_validate_flag_string <flag-string> [<context-label>]
+# Tokenizes a CLI flag bundle and validates each --flag and its value.
+# Echoes errors to stderr; returns 0 on success, 1 otherwise.
+photo_validate_flag_string() {
+    local flagstr="$1"
+    local ctx="${2:-flags}"
+    # shellcheck disable=SC2206
+    local -a tokens
+    # Use eval to honour quoted values (e.g. "Coca Tattoo")
+    local rc_eval=0
+    eval "tokens=($flagstr)" 2>/dev/null || rc_eval=1
+    if [[ $rc_eval -ne 0 ]]; then
+        echo "  x [$ctx] tokenizare esuata (quoting invalid?): $flagstr" >&2
+        return 1
+    fi
+
+    local errors=0 i=0 n=${#tokens[@]}
+    local tok kind schema stype sconstraint val
+    local IFS_BAK="$IFS"
+
+    while [[ $i -lt $n ]]; do
+        tok="${tokens[$i]}"
+        kind=$(photo_flag_kind "$tok")
+        if [[ -z "$kind" ]]; then
+            echo "  x [$ctx] flag necunoscut: $tok" >&2
+            errors=$((errors+1))
+            i=$((i+1))
+            continue
+        fi
+        if [[ "$kind" == "none" ]]; then
+            i=$((i+1))
+            continue
+        fi
+        # value or optional-value
+        local next_idx=$((i+1))
+        if [[ $next_idx -ge $n ]]; then
+            if [[ "$kind" == "value" ]]; then
+                echo "  x [$ctx] $tok cere o valoare (lipseste)" >&2
+                errors=$((errors+1))
+            fi
+            i=$((i+1))
+            continue
+        fi
+        local next_tok="${tokens[$next_idx]}"
+        if [[ "$kind" == "optional-value" ]]; then
+            # Consume next token only if it does NOT start with '-'
+            if [[ "$next_tok" == -* ]]; then
+                i=$((i+1))
+                continue
+            fi
+        fi
+        val="$next_tok"
+        schema=$(photo_flag_value_schema "$tok")
+        if [[ -n "$schema" ]]; then
+            stype="${schema%%:*}"
+            sconstraint="${schema#*:}"
+            case "$stype" in
+                enum)
+                    local IFS=','
+                    local allowed=($sconstraint)
+                    IFS="$IFS_BAK"
+                    local ok=0 a
+                    for a in "${allowed[@]}"; do
+                        [[ "$val" == "$a" ]] && { ok=1; break; }
+                    done
+                    if [[ $ok -eq 0 ]]; then
+                        echo "  x [$ctx] $tok \"$val\" -- valori permise: $sconstraint" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                regex)
+                    if ! [[ "$val" =~ $sconstraint ]]; then
+                        echo "  x [$ctx] $tok \"$val\" -- nu corespunde: $sconstraint" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                intrange)
+                    local rmin="${sconstraint%,*}" rmax="${sconstraint#*,}"
+                    if ! [[ "$val" =~ ^[0-9]+$ ]] || [[ "$val" -lt "$rmin" ]] || [[ "$val" -gt "$rmax" ]]; then
+                        echo "  x [$ctx] $tok \"$val\" -- astept $rmin..$rmax" >&2
+                        errors=$((errors+1))
+                    fi
+                    ;;
+                string|path)
+                    : # no constraint
+                    ;;
+            esac
+        fi
+        i=$((i+2))
+    done
+
+    [[ $errors -gt 0 ]] && return 1
+    return 0
+}
+
+# photo_validate_predefined_profiles <file>
+# Parses photo_profiles.conf (lines: "name = -f x -p y ..."), validates each
+# entry's flag string. Echoes errors to stderr; returns 0/1.
+photo_validate_predefined_profiles() {
+    local pf="$1"
+    [[ ! -f "$pf" ]] && { echo "  x Profil inexistent: $pf" >&2; return 1; }
+
+    local errors=0 lineno=0 line name flags
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        lineno=$((lineno+1))
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_-]+)[[:space:]]*=[[:space:]]*(.+)$ ]]; then
+            name="${BASH_REMATCH[1]}"
+            flags="${BASH_REMATCH[2]}"
+            # Strip trailing whitespace
+            flags="${flags%"${flags##*[![:space:]]}"}"
+            if ! photo_validate_flag_string "$flags" "linia $lineno: $name"; then
+                errors=$((errors+1))
+            fi
+        else
+            echo "  x [linia $lineno] format invalid (astept 'name = flags'): $line" >&2
+            errors=$((errors+1))
+        fi
+    done < "$pf"
+
+    [[ $errors -gt 0 ]] && return 1
+    return 0
+}
+
 # ── Auto-resolve paths la sourcing ──────────────────────────────────────────
 photo_resolve_paths
 

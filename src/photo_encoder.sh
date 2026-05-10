@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# photo_encoder.sh v4.7 — Professional Batch Photo Encoder
+# photo_encoder.sh v4.8 — Professional Batch Photo Encoder
 # ============================================================================
 # Formats:  AVIF/HEIC/JPEG/PNG/WEBP/TIFF/RAW/DNG/JXL → AVIF/WEBP/JPEG/HEIC/PNG/JXL
 # Motion:   Samsung Motion Photo + Google Motion Picture + iPhone Live Photo
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-VERSION="4.7"
+VERSION="4.8"
 
 # ── Cross-platform foundation (detect_platform, paths, wrappers) ────────────
 # Rezolva symlinks (cross-platform: GNU + BSD readlink, single-hop loop)
@@ -495,6 +495,18 @@ parse_profile_args() {
 # PS1 uses Set-Variable (zero-maintenance) because PowerShell scope is safer.
 load_profile_conf() {
     local conf_file="$1"
+    # v4.8: validate up-front. Errors are non-blocking by default (warnings) so
+    # legacy/older profiles that have unknown keys still load. Set
+    # PHOTO_NONINTERACTIVE=1 to fail fast instead.
+    if type photo_validate_user_profile >/dev/null 2>&1; then
+        if ! photo_validate_user_profile "$conf_file"; then
+            if [[ "${PHOTO_NONINTERACTIVE:-0}" == "1" ]] || [[ ! -t 0 ]]; then
+                log_error "Profil invalid (mod non-interactiv) — abort"
+                return 1
+            fi
+            log_warn "Profilul are erori de validare; continui oricum (Ctrl+C pentru abort)."
+        fi
+    fi
     while IFS= read -r line; do
         line="${line## }"; line="${line%% }"
         [[ -z "$line" || "$line" == \#* ]] && continue

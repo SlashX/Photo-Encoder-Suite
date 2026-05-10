@@ -3,6 +3,109 @@
 ═══════════════════════════════════════════════════════════════
 
 
+  v4.8 — Profile audit system + Test suite
+───────────────────────────────────────────────────────────────
+  Doua adaugiri majore care nu schimba comportamentul existent: un
+  sistem complet de validare/diff/template pentru profile si o suita
+  de teste cu framework propriu, runner si fixtures.
+
+  ADD src/photo_common.sh — sectiunea "v4.8 — PROFILE SCHEMA + VALIDATION"
+    (~270 linii noi). Acopera ambele formate de profile Photo:
+    - photo_profile_schema_get KEY -> "TYPE:CONSTRAINT" pentru cheile din
+      UserProfiles/*.conf (KEY=VALUE: Format/Quality/Preset/...). Tipuri:
+      enum, bool, int, intrange, regex, string, path. ~40 chei mapate.
+    - photo_validate_user_profile FILE — parseaza KEY=VALUE, valideaza
+      per-cheie, raporteaza erori cu numar de linie. Cheile necunoscute
+      trec ca warning (forward-compat).
+    - photo_flag_kind FLAG -> none | value | optional-value | "" pentru
+      ~40 flag-uri CLI (cu/fara argument, --skip-similar optional).
+    - photo_flag_value_schema FLAG — schema valoare per flag (mirror la
+      cea pentru UserProfiles, dar keyed by --flag).
+    - photo_validate_flag_string STR — tokenizeaza un bundle de flag-uri
+      CLI (cu suport quoting), valideaza fiecare flag + value. Honoreaza
+      "optional-value" (nu consuma --next ca valoare la --skip-similar).
+    - photo_validate_predefined_profiles FILE — parseaza
+      photo_profiles.conf (multi-entry "name = -f x -p y ..."), ruleaza
+      photo_validate_flag_string pe fiecare entry.
+
+  ADD src/photo_profile_lib.ps1 (NEW, ~230 linii) — mirror PowerShell
+    cu aceeasi semantica si aceleasi liste de chei/flaguri. Functii
+    publice: Get-PhotoProfileSchema, Test-PhotoUserProfile,
+    Get-PhotoFlagKind, Get-PhotoFlagValueSchema, Test-PhotoFlagString,
+    Test-PhotoPredefinedProfiles. Dot-source-uit din photo_encoder.ps1
+    si din test-uri (acelasi pattern cu photo_common.sh pe bash).
+
+  ADD src/tools/photo_profile_diff.{sh,ps1} — diff intre doua profile.
+    Doua moduri:
+      photo_profile_diff a.conf b.conf      (mod KEY=VALUE — UserProfiles)
+      photo_profile_diff --predefined A B [--file profiles.conf]
+                                             (entries din photo_profiles.conf)
+    Predefined: extrage flag-string-urile celor doua entries, le
+    tokenizeaza si raporteaza flag-uri "doar in A", "doar in B" si
+    "valori diferite". Identice => exit 0; diff => exit 1; eroare => 2.
+
+  ADD src/tools/photo_profile_template.{sh,ps1} — genereaza
+    UserProfiles/_template.conf cu toate cheile cunoscute, fiecare:
+    - precedata de comentariu cu valorile permise (extras din schema)
+    - cu valoare default sugerata (Format=avif, Quality=80, etc.)
+    - comentata cu # — utilizatorul decomenteaza ce vrea sa activeze
+    Idempotent: refuza overwrite fara --force / -Force.
+
+  ADD tests/ — suita de teste cross-platform:
+    - tests/framework.{sh,ps1} — assert_eq, assert_contains, assert_match,
+      assert_file_exists, assert_zero/nonzero, skip_test (exit 77),
+      auto-summary cu trap EXIT (sh) / Invoke-TestSummary (ps1).
+    - tests/run_tests.{sh,ps1} — discovery (test_*.sh in tests/, unit/,
+      integration/), exec, log per-test, summary cu pass/fail/skip + timp.
+    - tests/unit/ — 6 fisiere bash + 5 PS1:
+        test_framework_smoke           — sanity pe framework
+        test_profile_schema            — schema lookups
+        test_profile_validation_user   — KEY=VALUE OK/bad enum/bad range
+        test_profile_validation_predefined — photo_profiles.conf valid +
+                                            flag string edge cases
+        test_profile_diff              — predefined + user mode (sh + ps1)
+        test_pure_helpers (sh only)    — wrappers din photo_common
+    - tests/integration/ — 2 fisiere bash + 1 PS1, skip elegant cand
+      ImageMagick / sample-uri lipsesc (exit 77):
+        test_encode_smoke              — PNG -> AVIF end-to-end
+        test_check_csv (sh)            — photo_check produce CSV >= 40 col
+    - tests/fixtures/generate_samples.{sh,ps1} — sintetizeaza PNG/JPEG
+      via ImageMagick (256x256 gradient, 1024x768 plasma); HEIC best-effort
+      cu skip prietenos cand libheif lipseste.
+
+  ADD wire-up validation in load path (photo_encoder.sh + .ps1):
+    Cand interactive mode incarca un UserProfile, valideaza-l intai.
+    Erori in tty mode = warning (continua); erori cu PHOTO_NONINTERACTIVE=1
+    sau stdin non-tty = abort imediat. Nu afecteaza load-ul existent al
+    profilelor predefinite (--profile <name>).
+
+  UPDATE photo_encoder.ps1 — bump v4.6.1 -> v4.8 (ramas in urma in v4.7
+    care a fost release bash-only). Dot-source photo_profile_lib.ps1 dupa
+    blocul de paths.
+
+  UPDATE .gitignore — exclude tests/results/ si tests/fixtures/samples/
+    (ambele se regenereaza local).
+
+  Files:
+    + src/photo_profile_lib.ps1                       (NEW)
+    + src/tools/photo_profile_diff.sh                 (NEW)
+    + src/tools/photo_profile_diff.ps1                (NEW)
+    + src/tools/photo_profile_template.sh             (NEW)
+    + src/tools/photo_profile_template.ps1            (NEW)
+    + tests/framework.sh, framework.ps1               (NEW)
+    + tests/run_tests.sh, run_tests.ps1               (NEW)
+    + tests/unit/* (11 fisiere)                       (NEW)
+    + tests/integration/* (3 fisiere)                 (NEW)
+    + tests/fixtures/generate_samples.{sh,ps1}        (NEW)
+    M src/photo_common.sh             (+~270 linii: profile schema + valid)
+    M src/photo_encoder.sh            (v4.7 -> v4.8, validation in load)
+    M src/photo_encoder.ps1           (v4.6.1 -> v4.8, dot-source lib + valid)
+    M docs/photo_changelog.txt        (+ entry v4.8)
+    M docs/photo_info.txt             (+ sectiune Profile/Test)
+    M README.md                       (+ sectiune Testing)
+    M .gitignore                      (+ tests/results, fixtures/samples)
+
+
   v4.7 — Cross-platform bash (Linux + macOS support)
 ───────────────────────────────────────────────────────────────
   BREAKING shebang `#!/data/data/com.termux/files/usr/bin/bash`

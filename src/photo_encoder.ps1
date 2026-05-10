@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    photo_encoder.ps1 v4.6.1 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
+    photo_encoder.ps1 v4.8 — Professional Photo Encoder — Samsung / Google / iPhone / DJI — Ultra HDR
 .DESCRIPTION
     Full-featured converter with Ultra HDR (gain map detect/strip/extract/decode),
     classic HDR, tone mapping, quality presets, watermark, crop, motion photo, etc.
@@ -61,7 +61,7 @@ param(
     [string]$Profile = ""
 )
 
-$Version = "4.6.1"
+$Version = "4.8"
 $ErrorActionPreference = "Stop"
 
 # ── Paths ───────────────────────────────────────────────────────────────────
@@ -71,6 +71,10 @@ $ToolsDir = Join-Path $ScriptDir "tools"
 $ProfilesDir = Join-Path $ScriptDir "profiles"
 $UserProfilesDir = Join-Path $ScriptDir "UserProfiles"
 $LutsDir = Join-Path $ScriptDir "luts"
+
+# ── Profile schema + validation library (dot-sourced; tests use it too) ─────
+$ProfileLibPath = Join-Path $ScriptDir "photo_profile_lib.ps1"
+if (Test-Path -LiteralPath $ProfileLibPath) { . $ProfileLibPath }
 
 # ── Launch mode (when no args given on command line) ────────────────────────
 $InteractiveMode = $false
@@ -117,6 +121,18 @@ if ($InteractiveMode) {
             if ($choiceIdx -ge 0 -and $choiceIdx -lt $ProfileFiles.Count) {
                 $loadFile = $ProfileFiles[$choiceIdx].FullName
                 Write-Host "  Loading: $($ProfileFiles[$choiceIdx].BaseName)" -ForegroundColor Green
+                # v4.8: validate user profile before loading; warn on errors but
+                # do not block (interactive mode). Set $env:PHOTO_NONINTERACTIVE=1
+                # to fail-fast.
+                if (Get-Command Test-PhotoUserProfile -ErrorAction SilentlyContinue) {
+                    if (-not (Test-PhotoUserProfile -Path $loadFile)) {
+                        if ($env:PHOTO_NONINTERACTIVE -eq '1') {
+                            Write-Host "[ERROR] Profil invalid (mod non-interactiv) - abort" -ForegroundColor Red
+                            exit 1
+                        }
+                        Write-Host "  ! Profilul are erori de validare; continui oricum (Ctrl+C pentru abort)." -ForegroundColor Yellow
+                    }
+                }
                 # Generic load (Set-Variable) — zero-maintenance
                 Get-Content $loadFile | ForEach-Object {
                     $_ = $_.Trim()
