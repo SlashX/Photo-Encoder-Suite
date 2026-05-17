@@ -106,7 +106,8 @@ OPTIONAL (recomandat):
     Windows: https://exiftool.org
 
   - jpegtran/mozjpeg  (lossless JPEG optimization)
-    Termux: pkg install libjpeg-turbo
+    Termux: pkg install libjpeg-turbo -y
+    Termux: pkg install libjpeg-turbo-progs	
     Windows: https://mozjpeg.codelove.de/binaries.html
 
   - libultrahdr       (ultrahdr_app — decodare completa Ultra HDR +
